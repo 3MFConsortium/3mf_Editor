@@ -8,7 +8,7 @@ The editor can be executed by double clicking on the JAR file or if you are enco
 
 java -jar 3MFedit.jar
 
->**Disclaimer** this editor is limited to relatively small files in order to validate 3MF conformance on produced simple 3MF files, but not for validating large user files.
+>**Disclaimer** this editor is limited to relatively small files in order to validate 3MF conformance for sample produced 3MF files, but not for validating large user files.
 
 The 3MF Editor supports the following versions of the 3MF specifications:
 * 3MF Core Specification - [Version 1.4.0](https://github.com/3MFConsortium/spec_core/blob/1.4.0/3MF%20Core%20Specification.md)
