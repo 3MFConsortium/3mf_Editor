@@ -8,4 +8,4 @@ The editor can be executed by double clicking on the JAR file or if you are enco
 
 java -jar 3MFedit.jar
 
->**Disclaimer** this editor is limited to relatively small files in order to validate specific 3MF conformance, but not for validating large user files.
+>**Disclaimer** this editor is limited to relatively small files in order to validate 3MF conformance on produced simple 3MF files, but not for validating large user files.
