@@ -13,4 +13,4 @@ cli_batch -C -L test_list.txt -I -W
 
 ### Test results
 
-Each test results, with errors and warnings detected, will be found in the cliResults folder, including a HTML aggregate with these results.
+Each test results, with errors and warnings detected, will be found in the cliResults folder, including a XML aggregate with these results.
