@@ -126,3 +126,60 @@ jobs:
         echo "=========================================="
         echo "Compilation: ${{ steps.compile_strict.outcome == 'success' && '✓ Passed with no warnings' || '⚠️  Passed with warnings' }}"
         echo "=========================================="
+
+  veracode-scan:
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev_editor'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 8
+      uses: actions/setup-java@v4
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+        
+    - name: Build JAR for scanning
+      run: |
+        cd 3MF
+        mkdir -p bin
+        javac -cp "jar/*" -d bin -sourcepath src src/com/qualitylogic/x3mf/*.java
+        cp -r src/resources bin/
+        mkdir -p META-INF
+        cat > META-INF/MANIFEST.MF << EOF
+        Manifest-Version: 1.0
+        Main-Class: com.qualitylogic.x3mf.StartUp
+        Class-Path: jar/commons-cli-1.4.jar jar/commons-compress-1.12.jar jar/commons-io-2.5.jar jar/commons-lang3-3.3.2.jar jar/commons-logging-1.2.jar jar/commons-validator-1.6.jar jar/j3d-core-1.5.2.jar jar/vecmath-1.5.2.jar
+        EOF
+        jar cfm 3MFedit.jar META-INF/MANIFEST.MF -C bin .
+        
+    - name: Create Veracode package
+      run: |
+        cd 3MF
+        mkdir -p veracode-package
+        cp 3MFedit.jar veracode-package/
+        cp jar/*.jar veracode-package/
+        cd veracode-package
+        zip -r ../3MFedit-veracode.zip .
+        
+    - name: Veracode Upload and Scan
+      uses: veracode/veracode-uploadandscan-action@0.2.6
+      with:
+        appname: '3MF Editor'
+        createprofile: true
+        filepath: '3MF/3MFedit-veracode.zip'
+        vid: '${{ secrets.VERACODE_API_ID }}'
+        vkey: '${{ secrets.VERACODE_API_KEY }}'
+        scantimeout: 15
+      continue-on-error: true
+      
+    - name: Upload Veracode package as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: veracode-package
+        path: 3MF/3MFedit-veracode.zip
+        retention-days: 30
