@@ -165,16 +165,16 @@ jobs:
         cd veracode-package
         zip -r ../3MFedit-veracode.zip .
         
-    - name: Veracode Upload and Scan
-      uses: veracode/veracode-uploadandscan-action@0.2.6
-      with:
-        appname: '3MF Editor'
-        createprofile: true
-        filepath: '3MF/3MFedit-veracode.zip'
-        vid: '${{ secrets.VERACODE_API_ID }}'
-        vkey: '${{ secrets.VERACODE_API_KEY }}'
-        scantimeout: 15
-      continue-on-error: true
+    # - name: Veracode Upload and Scan
+    #   uses: veracode/veracode-uploadandscan-action@0.2.6
+    #   with:
+    #     appname: '3MF Editor'
+    #     createprofile: true
+    #     filepath: '3MF/3MFedit-veracode.zip'
+    #     vid: '${{ secrets.VERACODE_API_ID }}'
+    #     vkey: '${{ secrets.VERACODE_API_KEY }}'
+    #     scantimeout: 15
+    #   continue-on-error: true
       
     - name: Upload Veracode package as artifact
       uses: actions/upload-artifact@v4
