@@ -1,11 +1,6 @@
 name: Build Java JAR
 
-on:
-  push:
-    branches: [ main, dev_editor ]
-  pull_request:
-    branches: [ main, dev_editor ]
-  workflow_dispatch:
+on: [pull_request]
 
 jobs:
   build:
