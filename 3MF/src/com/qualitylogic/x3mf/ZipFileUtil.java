@@ -33,12 +33,12 @@ import org.apache.commons.io.FileUtils;
 public class ZipFileUtil { 
 
 	/**
-  * Zip files into zip format
-  *
-  * @param files
-  * Files to be compressed
-  * @param zipFilePath
-  * Compressed zip file path, such as "D: /test/aa.zip";
+	 * Zip files into zip format
+	 *
+	 * @param files
+	 * Files to be compressed
+	 * @param zipFilePath
+	 * Compressed zip file path, such as "D: /test/aa.zip";
 	 */ 
 	public static boolean compressFile(String srcPath, String desPath, String desName, String base, String drop) throws IOException { 
 		File srcFile = new File(srcPath); 
@@ -171,12 +171,12 @@ public class ZipFileUtil {
 	//Switched away from this method for better read-only access in the second.
 
 	/**
-	  * Unzip the zip file to the specified folder
-	  *
-	  * @param zipFilePath
-	  * Zip file path, such as "D: /test/aa.zip"
-	  * @param saveFileDir
-	  * Extract the file storage path, such as "D: / test /"
+	 ï¿½* Unzip the zip file to the specified folder
+	ï¿½ï¿½*
+	ï¿½ï¿½* @param zipFilePath
+	ï¿½ï¿½* Zip file path, such as "D: /test/aa.zip"
+	ï¿½ï¿½* @param saveFileDir
+	ï¿½ï¿½* Extract the file storage path, such as "D: / test /"
 	 */ 
 	public static void decompressZipAlt(String zipFilePath, String saveFileDir) { 
 		if (isEndsWithZip(zipFilePath)) { 
@@ -233,12 +233,12 @@ public class ZipFileUtil {
 	} 
 
 	/**
-	  * Unzip the zip file to the specified folder
-	  *
-	  * @param zipFilePath
-	  * Zip file path, such as "D: /test/aa.zip"
-	  * @param saveFileDir
-	  * Extract the file storage path, such as "D: / test /"
+	 ï¿½* Unzip the zip file to the specified folder
+	ï¿½ï¿½*
+	ï¿½ï¿½* @param zipFilePath
+	ï¿½ï¿½* Zip file path, such as "D: /test/aa.zip"
+	ï¿½ï¿½* @param saveFileDir
+	ï¿½ï¿½* Extract the file storage path, such as "D: / test /"
 	 */ 
 	public static void decompressZip(String zipFilePath, String saveFileDir) { 
 		File zipFile = new File(zipFilePath);
@@ -309,14 +309,14 @@ public class ZipFileUtil {
 	} 
 
 	/**
-	  * Unzip a File in the zip file to the specified folder
-	  *
-	  * @param zipFilePath
-	  * Zip file path, such as "D: /test/aa.zip"
-	  * @param saveFileDir
-	  * Extract the file storage path, such as "D: / test /"
-	  * @param file
-	  * Extract the file, such as "_rels/.rels"
+	 ï¿½* Unzip a File in the zip file to the specified folder
+	ï¿½ï¿½*
+	ï¿½ï¿½* @param zipFilePath
+	ï¿½ï¿½* Zip file path, such as "D: /test/aa.zip"
+	ï¿½ï¿½* @param saveFileDir
+	ï¿½ï¿½* Extract the file storage path, such as "D: / test /"
+	ï¿½ï¿½* @param file
+	ï¿½ï¿½* Extract the file, such as "_rels/.rels"
 	 */ 
 	public static void decompressZipFile(String zipFilePath, String saveFileDir, String file) { 
 		File zipFile = new File(zipFilePath);
@@ -365,11 +365,11 @@ public class ZipFileUtil {
 
 
 	/**
-  * Determine whether the file name to. Zip as the suffix
-  *
-  * @param fileName
-  * Need to judge the file name
-  * @return is a zip file returns true, otherwise returns false
+ï¿½ï¿½* Determine whether the file name to. Zip as the suffix
+ï¿½ï¿½*
+ï¿½ï¿½* @param fileName
+ï¿½ï¿½* Need to judge the file name
+ï¿½ï¿½* @return is a zip file returns true, otherwise returns false
 	 */ 
 	public static boolean isEndsWithZip(String fileName) { 
 		boolean flag = false; 
