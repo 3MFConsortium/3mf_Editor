@@ -1,0 +1,64 @@
+name: Build Java JAR
+
+on:
+  push:
+    branches: [ main, dev_editor ]
+  pull_request:
+    branches: [ main, dev_editor ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 8
+      uses: actions/setup-java@v4
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+        
+    - name: Compile Java source
+      run: |
+        cd 3MF
+        mkdir -p bin
+        javac -cp "jar/*" -d bin -sourcepath src src/com/qualitylogic/x3mf/*.java
+        
+    - name: Copy resources
+      run: |
+        cd 3MF
+        cp -r src/resources bin/
+        
+    - name: Create JAR manifest
+      run: |
+        cd 3MF
+        mkdir -p META-INF
+        cat > META-INF/MANIFEST.MF << EOF
+        Manifest-Version: 1.0
+        Main-Class: com.qualitylogic.x3mf.StartUp
+        Class-Path: jar/commons-cli-1.4.jar jar/commons-compress-1.12.jar jar/commons-io-2.5.jar jar/commons-lang3-3.3.2.jar jar/commons-logging-1.2.jar jar/commons-validator-1.6.jar jar/j3d-core-1.5.2.jar jar/vecmath-1.5.2.jar
+        EOF
+        
+    - name: Create JAR file
+      run: |
+        cd 3MF
+        jar cfm 3MFedit.jar META-INF/MANIFEST.MF -C bin .
+        
+    - name: Upload JAR artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: 3MFedit
+        path: 3MF/3MFedit.jar
+        retention-days: 30
+        
+    - name: Upload JAR with dependencies
+      uses: actions/upload-artifact@v4
+      with:
+        name: 3MFedit-with-dependencies
+        path: |
+          3MF/3MFedit.jar
+          3MF/jar/*.jar
+        retention-days: 30
