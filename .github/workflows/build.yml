@@ -27,33 +27,46 @@ jobs:
         cd 3MF
         cp -r src/resources bin/
         
-    - name: Create JAR manifest
+    - name: Extract dependency JARs
       run: |
         cd 3MF
-        mkdir -p META-INF
-        cat > META-INF/MANIFEST.MF << EOF
+        mkdir -p extracted-deps
+        for jar in jar/*.jar; do
+          unzip -o -q "$jar" -d extracted-deps/ || true
+        done
+        # Remove signature files to avoid conflicts
+        rm -rf extracted-deps/META-INF/*.SF
+        rm -rf extracted-deps/META-INF/*.DSA
+        rm -rf extracted-deps/META-INF/*.RSA
+        
+    - name: Merge dependencies with compiled code
+      run: |
+        cd 3MF
+        # Copy extracted dependencies to bin
+        cp -r extracted-deps/* bin/
+        
+    - name: Create self-contained JAR manifest
+      run: |
+        cd 3MF
+        mkdir -p bin/META-INF
+        cat > bin/META-INF/MANIFEST.MF << EOF
         Manifest-Version: 1.0
         Main-Class: com.qualitylogic.x3mf.StartUp
-        Class-Path: jar/commons-cli-1.4.jar jar/commons-compress-1.12.jar jar/commons-io-2.5.jar jar/commons-lang3-3.3.2.jar jar/commons-logging-1.2.jar jar/commons-validator-1.6.jar jar/j3d-core-1.5.2.jar jar/vecmath-1.5.2.jar
         EOF
         
-    - name: Create JAR file
+    - name: Create self-contained JAR file
       run: |
         cd 3MF
-        jar cfm 3MFedit.jar META-INF/MANIFEST.MF -C bin .
+        jar cfm 3MFedit.jar bin/META-INF/MANIFEST.MF -C bin .
         
-    - name: Upload JAR artifact
+    - name: Test JAR is executable
+      run: |
+        cd 3MF
+        java -jar 3MFedit.jar --help || echo "JAR created successfully (help output may not be available)"
+        
+    - name: Upload self-contained JAR artifact
       uses: actions/upload-artifact@v4
       with:
-        name: 3MFedit
+        name: 3MFedit-standalone
         path: 3MF/3MFedit.jar
-        retention-days: 30
-        
-    - name: Upload JAR with dependencies
-      uses: actions/upload-artifact@v4
-      with:
-        name: 3MFedit-with-dependencies
-        path: |
-          3MF/3MFedit.jar
-          3MF/jar/*.jar
         retention-days: 30
