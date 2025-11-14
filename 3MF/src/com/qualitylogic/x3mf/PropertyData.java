@@ -11,6 +11,7 @@ import javax.swing.JOptionPane;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.commons.lang3.StringUtils;
 
 public class PropertyData {
 
@@ -65,7 +66,7 @@ public class PropertyData {
 						ib=stringFromFile.indexOf("\"");
 						ie=stringFromFile.indexOf("\"",ib+1);
 						if(ib == -1 || ie == -1){
-							logger.info("Error, missing quote(s) in: " + stringFromFile);
+logger.info("Error, missing quote(s) in: " + StringUtils.normalizeSpace(stringFromFile));
 							continue;
 						}
 						tmpString=stringFromFile.substring(ib+1, ie);
