@@ -1,4 +1,7 @@
-# 3MF Editor V1.0
+# 3MF Editor
+| **Version** | 1.0 |
+| --- | --- |
+| **Status** | Published |
 
 This utility primary use case is the development of test cases and the validation of 3MF packages against the 3MF schema and specification conformance rules. From a tree view, the 3MF package structure can be edited including cutting and pasting parts. Any selected 3MF part with XML can be edited.
 
