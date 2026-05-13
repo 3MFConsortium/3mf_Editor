@@ -25,4 +25,3 @@ The 3MF Editor supports the following versions of the 3MF specifications:
 * [Office Open XML File Formats - Open Packaging Conventions - December 2012](https://www.ecma-international.org/news/TC45_current_work/Office%20Open%20XML%20Part%202%20-%20Open%20Packaging%20Conventions.pdf)
 
 It requires to select latest [3MF Consolidated Schema](https://github.com/3MFConsortium/test_suites/tree/master/Consolidated_Schema/Schema) downloaded from the 3MF Test suite.
-
