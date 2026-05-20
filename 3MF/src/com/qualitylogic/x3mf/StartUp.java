@@ -31,30 +31,6 @@ public class StartUp {
 	public static String fileList = "";
 
 	public static void main(String[] args) {
-		
-		//See if a process is already running.
-		if(SystemUtils.IS_OS_WINDOWS){
-			try {
-				String line;
-				ProcessBuilder pb = new ProcessBuilder(
-						System.getenv("windir") + "\\system32\\tasklist.exe",
-						"/nh",
-						"/fi", "SessionName eq Console",
-						"/fi", "Windowtitle eq 3MF Edit And Test");
-				Process p = pb.start();
-				BufferedReader input =  new BufferedReader(new InputStreamReader(p.getInputStream()));
-				while ((line = input.readLine()) != null) {
-					System.out.println(line);
-					if(line.contains("java")){
-						System.out.println("3MF Edit And Test already running, exiting.");
-						System.exit(0);
-					}
-				}
-				input.close();
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
 
 		//Setup the command line with a -O option style
 
