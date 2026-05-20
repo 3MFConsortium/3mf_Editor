@@ -36,8 +36,12 @@ public class StartUp {
 		if(SystemUtils.IS_OS_WINDOWS){
 			try {
 				String line;
-				Process p =Runtime.getRuntime().exec(System.getenv("windir") 
-						+"\\system32\\"+"tasklist.exe /nh /fi \"SessionName eq Console\" /fi \"Windowtitle eq 3MF Edit And Test\"");
+				ProcessBuilder pb = new ProcessBuilder(
+						System.getenv("windir") + "\\system32\\tasklist.exe",
+						"/nh",
+						"/fi", "SessionName eq Console",
+						"/fi", "Windowtitle eq 3MF Edit And Test");
+				Process p = pb.start();
 				BufferedReader input =  new BufferedReader(new InputStreamReader(p.getInputStream()));
 				while ((line = input.readLine()) != null) {
 					System.out.println(line);
@@ -50,7 +54,6 @@ public class StartUp {
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
-
 		}
 
 		//Setup the command line with a -O option style
