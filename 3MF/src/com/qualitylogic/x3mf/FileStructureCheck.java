@@ -127,14 +127,14 @@ public class FileStructureCheck {
 			"ER_033", "ER_034", "ER_035", "ER_036", "ER_050", "ER_057", "ER_061", "ER_063", "ER_064", "ER_065",
 			"ER_066", "ER_082", "ER_083", "ER_084", "ER_087", "ER_094", "ER_095", "ER_096", "ER_109", "ER_110",
 			"ER_111", "ER_080", "ER_086", "ER_089", "ER_090", "ER_091", "ER_092", "ER_093", "ER_098", "ER_112",
-			"ER_113", "ER_099", "ER_100", "ER_020", "ER_007", "ER_008", "ER_013", "ER_014", "ER_056", "ER_060",
+			"ER_113", "ER_099", "ER_100", "ER_020", "ER_007", "ER_008", "ER_013", "ER_056", "ER_060",
 			"ER_062", "ER_078", "ER_079", "ER_081", "ER_085", "ER_088", "ER_097", "ER_004", "ER_010", "ER_015",
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
 			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "ER_176");
 
 	public FileStructureCheck() {
 	}
@@ -1070,18 +1070,17 @@ public class FileStructureCheck {
 				// System.out.println(overRideFileCheck(name));
 				if (!bLocate && overRideFileCheck("/" + name)) {
 					bLocate = true;
-					break;
 				}
 				if (!bLocate) {
-					fErrorReturn += "<br>ER_014: Could not find an extension for " + name
+					fWarningReturn += "<br>WR_024: Could not find an extension for " + name
 							+ " in [Content_Types].xml<br>";
-					fxmlErrorReturn += "<Issue  issueID=\"ER_014\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-					fxmlErrorReturn += "Could not find an extension for " + name + " in [Content_Types].xml";
-					fxmlErrorReturn += "</Issue>";
-					errChk("ER_014");
-					ierCnt++;
-					if (ierCnt > iErrMaxStr) {
-						fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+					fxmlWarningReturn += "<Issue  issueID=\"WR_024\" severity=\"info\" class=\"structure\" type=\"content type warning\">";
+					fxmlWarningReturn += "Could not find an extension for " + name + " in [Content_Types].xml";
+					fxmlWarningReturn += "</Issue>";
+					errChk("WR_024");
+					iwrCnt++;
+					if (iwrCnt > iWrnMaxStr) {
+						fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
 						return;
 					}
 				}

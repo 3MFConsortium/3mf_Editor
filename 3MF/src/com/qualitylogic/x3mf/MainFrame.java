@@ -950,6 +950,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				String szTime = ztimeA(System.currentTimeMillis());
 				if(StartUp.brunVal){
 					chkSchZip();
+					if(bChkError){
+						pf = "Fail";
+					}
 				}
 				if(StartUp.brunStruct){
 					if(!bChkError || StartUp.brunIfFail){
@@ -958,7 +961,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 							pf = "Fail";
 						}
 						if(!fxmlWarningReturn.equals("")){
-							if(pf.equals("")) pf = "Warning";
+							if(pf.equals("Pass")) pf = "Warning";
 						}
 
 					} else {
@@ -1092,6 +1095,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 						saveForConsole = "";
 						if(StartUp.brunVal){
 							chkSchZip();
+							if(bChkError){
+								pf = "Fail";
+							}
 						}
 						if(StartUp.brunStruct){
 							if(!bChkError || StartUp.brunIfFail){
@@ -1100,7 +1106,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 									pf = "Fail";
 								}
 								if(!fxmlWarningReturn.equals("")){
-									if(pf.equals("")) pf = "Warning";
+								if(pf.equals("Pass")) pf = "Warning";
 								}
 							} else {
 								saveForConsole += "<br>Aborting file structure check due to schema violations!<br>";
