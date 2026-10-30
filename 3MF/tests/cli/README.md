@@ -66,6 +66,19 @@ Secure Content cases use the editor's existing decryption behavior and the offic
 
 ## Test the runner itself
 
+To check archive extraction and natural filename ordering without a desktop session
+or the official fixtures, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Test-ZipFileUtil.ps1
+```
+
+This compiles the archive utility and runs filesystem regressions for all three
+extraction methods, path traversal and absolute paths, preserving source read-only
+attributes, preserving unrelated `ztmp` contents during fallback, and comparator
+ordering (including underscores, leading zeros and numbers larger than a `long`).
+Generated fixtures and logs are retained under `tests/cli/results/zip-utils-*`.
+
 To verify alternative object references (issue #3), run:
 
 ```powershell
