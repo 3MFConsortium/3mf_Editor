@@ -2289,8 +2289,7 @@ public class FileStructureCheck {
 						Node defN = nl.item(ic);
 						String fFile = "";
 
-						// If this has a transform, validate that m02, m12, m20,
-						// and m21 are 0 and m22 is 1
+						// Collect planar-transform violations for the slice-only check below.
 						if (defN.getAttributes().getNamedItem("transform") != null) {
 							String stran = defN.getAttributes().getNamedItem("transform").getTextContent().trim()
 									.replaceAll(" +", " ");
@@ -2302,60 +2301,30 @@ public class FileStructureCheck {
 									transformErrorLoc
 											.add("ER_071: Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_071\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_071");
 								}
 								if (Float.parseFloat(tstNum[5]) != 0.f) {
 									transformErrorLoc
 											.add("ER_072: Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_072\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_072");
 								}
 								if (Float.parseFloat(tstNum[6]) != 0.f) {
 									transformErrorLoc
 											.add("ER_073: Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_073\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_073");
 								}
 								if (Float.parseFloat(tstNum[7]) != 0.f) {
 									transformErrorLoc
 											.add("ER_074: Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_074\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_074");
 								}
 								if (Float.parseFloat(tstNum[8]) != 1.f) {
 									transformErrorLoc
 											.add("ER_075: Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_075\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_075");
 								}
 							} catch (Exception et1) {
 								transformErrorLoc.add("ER_076: Could not parse number contained in " + stran
 										+ " transform in " + ename);
-								fxmlErrorReturn += "<Issue  issueID=\"ER_076\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-								fxmlErrorReturn += "Could not parse number contained in " + stran + " transform in "
-										+ ename;
-								fxmlErrorReturn += "</Issue>";
-								errChk("ER_076");
 							}
 
 						}
@@ -2581,8 +2550,7 @@ public class FileStructureCheck {
 					for (int ic = 0; ic < nl.getLength(); ic++) {
 						Node defN = nl.item(ic);
 
-						// If this has a transform, validate that m02, m12, m20,
-						// and m21 are 0 and m22 is 1
+						// Collect planar-transform violations for the slice-only check below.
 						if (defN.getAttributes().getNamedItem("transform") != null) {
 							String stran = defN.getAttributes().getNamedItem("transform").getTextContent().trim()
 									.replaceAll(" +", " ");
@@ -2594,60 +2562,30 @@ public class FileStructureCheck {
 									transformErrorLoc
 											.add("ER_071: Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_071\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_071");
 								}
 								if (Float.parseFloat(tstNum[5]) != 0.f) {
 									transformErrorLoc
 											.add("ER_072: Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_072\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_072");
 								}
 								if (Float.parseFloat(tstNum[6]) != 0.f) {
 									transformErrorLoc
 											.add("ER_073: Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_073\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_073");
 								}
 								if (Float.parseFloat(tstNum[7]) != 0.f) {
 									transformErrorLoc
 											.add("ER_074: Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_074\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_074");
 								}
 								if (Float.parseFloat(tstNum[8]) != 1.f) {
 									transformErrorLoc
 											.add("ER_075: Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_075\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_075");
 								}
 							} catch (Exception et1) {
 								transformErrorLoc.add("ER_076: Could not parse number contained in " + stran
 										+ " transform in " + ename);
-								fxmlErrorReturn += "<Issue  issueID=\"ER_076\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-								fxmlErrorReturn += "Could not parse number contained in " + stran + " transform in "
-										+ ename;
-								fxmlErrorReturn += "</Issue>";
-								errChk("ER_076");
 							}
 
 						}
@@ -3074,6 +3012,15 @@ public class FileStructureCheck {
 			// Check for 2d slices with bad transforms
 			if (b2dSlices && transformErrorLoc.size() > 0) {
 				for (String trs : transformErrorLoc) {
+					// Slice-only restrictions must affect XML and error status only
+					// when slice data is present, just like the HTML diagnostics.
+					String code = trs.substring(0, 6);
+					String message = trs.substring(8).replace("&", "&amp;")
+							.replace("<", "&lt;").replace(">", "&gt;");
+					fxmlErrorReturn += "<Issue issueID=\"" + code
+							+ "\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">"
+							+ message + "</Issue>";
+					errChk(code);
 					fErrorReturn += "<br>" + trs;
 					ierCnt++;
 					if (ierCnt > iErrMaxStr) {
