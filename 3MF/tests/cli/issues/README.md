@@ -8,6 +8,47 @@ regression scripts.
 
 Runs the 3MF Editor CLI against all model files in all 11 official suites and verifies its XML results using the positive/negative convention in section 5.1 of the [3MF Test Specification v2.4.1](https://github.com/3MFConsortium/test_suites/blob/master/test_specification/3MF_Test_Specification_v2_4_1.docx). Reads Appendix C directly from the DOCX to check that the checkout contains each specified suite/scenario/iteration. Duplicate Appendix C rows are treated as one membership entry.
 
+## Issue #19 investigation: documentation link points to a personal path
+
+[Issue #19](https://github.com/3MFConsortium/3mf_Editor/issues/19) is reproduced
+on the public [3MF Editor v1.0.0 announcement](https://3mf.io/announcement/2026/05/3mf-editor-v1-0-0-now-available/),
+checked on 2026-10-30. The **Full documentation** anchor in the sentence
+"Full documentation is included in the release" has this literal `href`:
+
+```text
+///Users/duann/Documents/BITS%20to%20ATOMS/3MF/3MF_Editor_Guide_v1_00.pdf
+```
+
+On the HTTPS page, browsers resolve this malformed reference to
+`https://users/duann/Documents/BITS%20to%20ATOMS/3MF/3MF_Editor_Guide_v1_00.pdf`,
+exactly matching the issue body. It does not retrieve a file from the author's
+computer; `users` becomes the network hostname. The only issue comment asks where
+the link was found and contains no additional reproduction details.
+
+The website maintainer should replace that anchor's destination with the
+[v1.0.0 release PDF](https://github.com/3MFConsortium/3mf_Editor/releases/download/v1.0.0/3MF_Editor_Guide_v1_00.pdf).
+An HTTP HEAD request followed redirects and returned 200 on 2026-10-30. The
+repository also provides the [Markdown guide](../../../Documentation/3MF_Editor_Guide_v1_00.md).
+No occurrence of the personal URL was found in current repository text sources,
+the public README, or the release description. The affected website content is
+outside this checkout; this investigation changes no production code and does
+not modify the website or post an issue comment.
+
+Manual regression after the website correction: open the announcement, click
+**Full documentation**, and confirm that the public release PDF opens and the
+destination no longer contains the personal path or the `users` hostname.
+No CLI conformance test applies to this website link.
+
+Separate finding: `MainFrame.java`'s Help action still opens a local
+`3MF_Editor_Guide_v1_00.pdf`, falling back to an embedded resource of that name.
+Commit `7da2102` removed the embedded PDF on 2026-10-29 after the Markdown
+conversion in `1527bac`. At the user's request, the original 178,457-byte PDF
+has been restored unchanged from `7da2102^` to
+`src/resources/3MF_Editor_Guide_v1_00.pdf`, making the embedded fallback available
+again when resources are packaged. Its Git blob ID matches the original:
+`2c3a36ccb79816490cece58041592bfcbe0974e8`. This is distinct from the website
+link reported in #19; the Help action contains no personal URL.
+
 ## Run
 
 Requires Windows PowerShell 5.1, Java and `javac` (JDK 17 or newer), and a local checkout of [3MFConsortium/test_suites](https://github.com/3MFConsortium/test_suites). CLI mode selects headless AWT before initializing Swing and does not require a desktop session or X11 DISPLAY.
