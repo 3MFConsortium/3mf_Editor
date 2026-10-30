@@ -1,5 +1,1 @@
 results/
-!issues/
-issues/*
-!issues/Test-SecureContent.ps1
-!issues/Test-ZipFileUtil.ps1
