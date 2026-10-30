@@ -809,6 +809,21 @@ public class FileStructureCheck {
 								return;
 							}
 						} else {
+							// OPC permits only one Override for each part, regardless of content type.
+							if (sOverRide.contains(pn.toLowerCase())) {
+								fErrorReturn += "<br>ER_108: The Override PartName " + pn
+										+ " has already been defined in [Content_Types].xml.<br>";
+								fxmlErrorReturn += "<Issue  issueID=\"ER_108\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
+								fxmlErrorReturn += "The Override PartName " + pn
+										+ " has already been defined in [Content_Types].xml.";
+								fxmlErrorReturn += "</Issue>";
+								errChk("ER_108");
+								ierCnt++;
+								if (ierCnt > iErrMaxStr) {
+									fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+									return;
+								}
+							}
 							sOverRide.add(pn.toLowerCase());
 						}
 					}
