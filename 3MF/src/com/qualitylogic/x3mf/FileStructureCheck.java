@@ -37,6 +37,8 @@ import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 
 public class FileStructureCheck {
+	private static final String VOLUMETRIC_NS = "http://schemas.3mf.io/3dmanufacturing/volumetric/2022/01";
+	private static final String IMPLICIT_NS = "http://schemas.3mf.io/3dmanufacturing/implicit/2023/12";
 	static Log logger = LogFactory.getLog(Class.class);
 	public String fCurrentFile = "";
 	public String fSchemaLoc = "";
@@ -7003,8 +7005,18 @@ public class FileStructureCheck {
 				}
 			}
 
-			// check resources that basematerials is first and object last.
+			// Keep material ordering; required volumetric/implicit extensions allow
+			// their resources to follow objects.
 			if (node.getNodeName().equals("resources")) {
+				Element model = node.getOwnerDocument().getDocumentElement();
+				boolean relaxedResourceOrdering = false;
+				for (String prefix : model.getAttribute("requiredextensions").trim().split("\\s+")) {
+					String namespace = model.lookupNamespaceURI(prefix);
+					if (VOLUMETRIC_NS.equals(namespace) || IMPLICIT_NS.equals(namespace)) {
+						relaxedResourceOrdering = true;
+						break;
+					}
+				}
 				NodeList childList = node.getChildNodes();
 				Boolean startBase = false;
 				Boolean endBase = false;
@@ -7042,9 +7054,10 @@ public class FileStructureCheck {
 						endBase = true;
 					}
 
-					// if we have set endObject, but find something else, that
-					// is bad
-					if (!name.equals("object") && endObject && !doOnceObj) {
+					boolean extensionResource = VOLUMETRIC_NS.equals(cnode.getNamespaceURI())
+							|| IMPLICIT_NS.equals(cnode.getNamespaceURI());
+					if (!name.equals("object") && endObject && !doOnceObj
+							&& !(relaxedResourceOrdering && extensionResource)) {
 						fErrorReturn += "<br>ER_103: Other resources appeared after object was defined " + " in file: "
 								+ file + ". The object elements should appear last in resources.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_103\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";

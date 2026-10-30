@@ -419,3 +419,89 @@ pass/fail conformance check; inspect `results.csv` and each case's stdout/stderr
 Logs remain under ignored `tests/cli/results/long-xml-lines-*`. Both new source
 files are visible to Git under the current local ignore rules; no ignore rules
 were changed by this investigation.
+
+## Issue #16 fix: volumetric and implicit resource ordering
+
+[Issue #16](https://github.com/3MFConsortium/3mf_Editor/issues/16) is confirmed
+against current sources on Windows/JDK 21 on 2026-10-30. The issue has no attached
+sample and no comments. The fix changes the structure check and adds a targeted
+CLI regression script.
+
+Previously, `FileStructureCheck.java` scanned each `resources` element and,
+after seeing an `object`, any subsequent element other than another `object`
+produced `ER_103`, regardless of namespace or the model's `requiredextensions`.
+The diagnostic appeared in both HTML and XML and made the CLI result `Fail`.
+The consolidated schema's `CT_Resources` instead uses a
+repeated choice including objects, volumetric resources, and implicit functions,
+so these models can pass schema validation before failing the structure check.
+
+The upstream [Volumetric and Implicit specification, section 1.1](https://github.com/3MFConsortium/spec_volumetric/blob/master/3MF%20Volumetric%20Extension.md#11-breaking-change-to-the-core-specification),
+checked live on 2026-10-30, permits the relevant resources to be interleaved
+**only when the volumetric extension is declared required**. Definitions must
+still precede references, and material ordering is not relaxed. Merely declaring
+an XML namespace or recommending the extension is not the stated trigger.
+The implemented acceptance rule also enables the relaxation when **implicit
+alone** is required.
+
+The check now resolves whitespace-separated `requiredextensions` prefixes to
+namespace URIs on the current model part. If either of the following is required,
+resources in either namespace may follow objects:
+
+- `http://schemas.3mf.io/3dmanufacturing/volumetric/2022/01`
+- `http://schemas.3mf.io/3dmanufacturing/implicit/2023/12`
+
+Aliases are supported; the decision is recomputed per model part rather than
+using the validator's accumulated required-prefix list. Declared-only,
+recommended-only, and unrelated required namespaces do not enable relaxation.
+Material and unrelated resource ordering still uses `ER_102`/`ER_103` as before.
+No reference-validation checks are bypassed.
+
+Reproduce from the `3MF` project directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ResourceOrdering.ps1
+```
+
+The script accepts `-TestSuiteRoot PATH`, compiles fresh editor sources, and
+generates 17 variants of official core fixture `P_XXX_0101_01.3mf`. It adds
+Production UUIDs needed by the consolidated schema and independently validates
+every generated model against that XSD before running the CLI. Minimal unused
+`v:volumedata` and `i:implicitfunction` resources isolate the ordering rule;
+these are not rendering or full extension-semantic conformance tests.
+
+| Case | Schema | Expected CLI | Actual CLI |
+| --- | --- | --- | --- |
+| Core control | Pass | Accept | Pass |
+| Volumedata before object, volumetric required | Pass | Accept | Pass |
+| Volumedata after object, volumetric required | Pass | Accept | Pass |
+| Same, required volumetric namespace bound to an alternate prefix | Pass | Accept | Pass |
+| Implicit function before object, volumetric and implicit required | Pass | Accept | Pass |
+| Implicit function after object, volumetric and implicit required | Pass | Accept | Pass |
+| Either resource after object, only implicit required (2 cases) | Pass | Accept | Pass |
+| Implicit function after object, only volumetric required | Pass | Accept | Pass |
+| Implicit required through an alias | Pass | Accept | Pass |
+| Required list with mixed whitespace, unrelated prefix, and volumetric alias | Pass | Accept | Pass |
+| Volumedata after object, volumetric not required | Pass | Reject | Fail, ER_103 |
+| Implicit function after object, neither extension required | Pass | Reject | Fail, ER_103 |
+| Extensions recommended only | Pass | Reject | Fail, ER_103 |
+| Unrelated extension required | Pass | Reject | Fail, ER_103 |
+| Base materials after object, volumetric required | Pass | Reject | Fail, ER_103 |
+| Base materials after object, implicit required | Pass | Reject | Fail, ER_103 |
+
+Before the fix, the original eight-case reproduction showed three false
+rejections, each containing only `ER_103` in XML and the same error in HTML.
+The regression checks acceptance/rejection and `ER_103` in both report formats.
+Results, JUnit output, generated packages, and CLI logs
+are retained under ignored `tests/cli/results/resource-ordering-*`.
+
+The new script is not Git-ignored under the current local rules. The CLI ignore
+file now also excludes `powershell.log`. All 17 regression cases pass on Windows/JDK 21, with all
+17 generated models passing independent consolidated-schema validation.
+`git diff --check` passes. No full conformance run was performed.
+
+The independent .NET schema check maps W3C `xml.xsd` imports to the same local
+`xml.xsd` used by relative imports. This prevents duplicate `xml:lang`
+declarations when the W3C URL is reachable and avoids network-dependent schema
+loading. It changes neither the source schemas nor production validation.
+The script also runs from `tests/cli` with
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\issues\Test-ResourceOrdering.ps1`.
