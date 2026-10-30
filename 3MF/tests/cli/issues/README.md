@@ -270,3 +270,45 @@ new Java helper is not ignored by Git. Generated reports remain ignored.
 Validation on Windows/JDK 21: all 18 headless checks, all seven beam object-type
 regressions, and the editor-window smoke check pass. A native Linux run was not
 available; headless JVM mode and zero-window assertions exercise display isolation.
+
+## Issue #12: whitespace in path and target references
+
+[Issue #12](https://github.com/3MFConsortium/3mf_Editor/issues/12) requests a warning
+when path and relationship target references contain leading or trailing spaces.
+The validator silently trimmed these values, hiding possible differences in how
+renderers resolve them.
+
+Structure validation now emits `WR_026` (`reference whitespace`) in HTML and XML
+for padded `path` (including namespace-prefixed paths), `slicepath`, `thumbnail`,
+and `Target` attributes. The diagnostic identifies the part, element, attribute,
+and original reference. Report text is escaped, the warning participates in
+primary-issue selection and the existing warning limit, and each attribute is
+reported once even when its part is read again. Decrypted model parts are also
+checked. Reference lookup and the package content are unchanged. Detection uses
+the same `trim()` comparison as existing lookup; internal and percent-encoded
+spaces do not produce this warning.
+
+Run from the `3MF` project directory (JDK 17+ and official fixtures required):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ReferenceWhitespace.ps1
+```
+
+Use `-TestSuiteRoot PATH` to override the default official fixture checkout.
+The script compiles current sources and generates cases from the official core,
+Production, Materials, and Slice fixtures. It checks clean values, leading spaces,
+trailing spaces, padding on both sides, and tabs/newlines for package relationships,
+part relationships, Production paths, texture paths, slice references and thumbnails.
+Additional cases check internal/encoded spaces, unrelated object-name whitespace,
+multiple padded references in one part, and escaped diagnostic text. It requires
+the expected warning count in both reports, primary-issue selection, and acceptance
+of the normalized references. Reports remain under
+`tests/cli/results/reference-whitespace-*`.
+
+Before the fix, all 24 padded-reference cases silently reported `Pass`, while the
+six clean controls passed. The regression script accompanies this fix. This fix
+does not change ignore rules.
+
+Validation on Windows/JDK 21: all 35 reference-whitespace regression cases and
+all 11 existing Secure Content regression checks pass. The changed Java source
+and this README also pass `git diff --check`.

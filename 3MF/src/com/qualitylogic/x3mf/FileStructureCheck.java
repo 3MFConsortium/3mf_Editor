@@ -26,6 +26,7 @@ import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.w3c.dom.Document;
@@ -46,6 +47,7 @@ public class FileStructureCheck {
 	public List<KeyInfo> keyinfo = null;
 	public int iErrMaxStr = 9;
 	public int iWrnMaxStr = 9;
+	private final Set<String> referenceWhitespaceParts = new HashSet<String>();
 	public boolean bnonSecure = true;
 	private String sContent;
 	private NodeList nType_default;
@@ -134,7 +136,7 @@ public class FileStructureCheck {
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
 			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_177", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "ER_176");
 
 	public FileStructureCheck() {
 	}
@@ -220,6 +222,7 @@ public class FileStructureCheck {
 		String sRootModel = "";
 		ierCnt = 0;
 		iwrCnt = 0;
+		referenceWhitespaceParts.clear();
 		// 1) does the zip contain a [Content_Types].xml
 		try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 			boolean bContent = false;
@@ -267,6 +270,10 @@ public class FileStructureCheck {
 								.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
 						doc.getDocumentElement().normalize();
 						Element root = doc.getDocumentElement();
+						if (!checkReferenceWhitespace(doc, name)) {
+							zin.close();
+							return;
+						}
 						if (root != null) {
 							String rootname = root.getNodeName();
 							if (rootname.toLowerCase().equals("keystore")) {
@@ -1497,6 +1504,10 @@ public class FileStructureCheck {
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
 					doc.getDocumentElement().normalize();
+
+					// Also inspect decrypted model parts, which were opaque in the ZIP pass.
+					if (!checkReferenceWhitespace(doc, ename.substring(1)))
+						return;
 
 					// gets a list of the uuids and stackids, expanded to
 					// include basematerials if present
@@ -7402,6 +7413,45 @@ public class FileStructureCheck {
 			ierCnt++;
 		}
 		return fnd;
+	}
+
+	/** Report padding before reference lookup trims it; never change the document. */
+	private boolean checkReferenceWhitespace(Document doc, String file) {
+		// Parts can be parsed again for references or decryption. Warn once per attribute.
+		if (!referenceWhitespaceParts.add(file))
+			return true;
+		NodeList elements = doc.getElementsByTagName("*");
+		for (int i = 0; i < elements.getLength(); i++) {
+			Node element = elements.item(i);
+			for (int j = 0; j < element.getAttributes().getLength(); j++) {
+				Node attribute = element.getAttributes().item(j);
+				// The initial ZIP pass uses a namespace-unaware DOM. Accept any prefix.
+				String name = attribute.getNodeName();
+				if (name.startsWith("xmlns:"))
+					continue;
+				String localName = name.substring(name.indexOf(':') + 1);
+				if (!localName.equals("path") && !localName.equals("slicepath")
+						&& !localName.equals("thumbnail") && !name.equals("Target"))
+					continue;
+				String value = attribute.getTextContent();
+				if (value.equals(value.trim()))
+					continue;
+				String message = "Leading or trailing whitespace in attribute " + name + " on element "
+						+ element.getNodeName() + " in file: " + file + "; reference: [" + value
+						+ "]. Consumers may resolve this reference differently.";
+				String escaped = StringEscapeUtils.escapeXml10(message);
+				fWarningReturn += "<br>WR_026: " + escaped + "<br>";
+				fxmlWarningReturn += "<Issue issueID=\"WR_026\" severity=\"info\" class=\"structure\" type=\"reference whitespace\">"
+						+ escaped + "</Issue>";
+				errChk("WR_026");
+				iwrCnt++;
+				if (iwrCnt > iWrnMaxStr) {
+					fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	private void backSlashWarn(String loc, String file) {
