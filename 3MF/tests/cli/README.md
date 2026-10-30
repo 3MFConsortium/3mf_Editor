@@ -66,6 +66,16 @@ Secure Content cases use the editor's existing decryption behavior and the offic
 
 ## Test the runner itself
 
+To match an existing completed run to the scenario definitions and criteria, without rerunning the CLI:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Compare-Specification.ps1 -RunDirectory tests/cli/results/YOUR-RUN
+```
+
+This writes `specification-match/expected-vs-observed.csv`, `comparison.md`, `summary.json`, and `scenario-definitions.json` inside that run directory. It verifies the specification hash, links every model to its scenario, preserves the original result status, and flags consumer-specific criteria. Header-only results from malformed XML are labeled provisional and do not turn report errors into verified passes. Rendering and diagnostic-reason correctness remain outside acceptance-only matching.
+
+To check the harness itself:
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Test-Runner.ps1
 ```
