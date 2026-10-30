@@ -10,7 +10,7 @@ Runs the 3MF Editor CLI against all model files in all 11 official suites and ve
 
 ## Run
 
-Requires Windows PowerShell 5.1, Java and `javac` (JDK 17 or newer), and a local checkout of [3MFConsortium/test_suites](https://github.com/3MFConsortium/test_suites). The existing CLI creates Swing components even in CLI mode, so it requires a desktop session. A headless Linux CI agent cannot run it as-is.
+Requires Windows PowerShell 5.1, Java and `javac` (JDK 17 or newer), and a local checkout of [3MFConsortium/test_suites](https://github.com/3MFConsortium/test_suites). CLI mode selects headless AWT before initializing Swing and does not require a desktop session or X11 DISPLAY.
 
 From the `3MF` directory:
 
@@ -177,7 +177,7 @@ includes the model part, object ID and offending type, updates the structure
 error count, and registers the diagnostic for primary-issue selection. Objects
 without beam lattices are unaffected by this rule.
 
-Run from the `3MF` project directory (JDK 17+ and a desktop session required):
+Run from the `3MF` project directory (JDK 17+ required):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-BeamObjectTypes.ps1
@@ -207,7 +207,7 @@ discovery, including when root relationships are absent, so later packages canno
 reuse previous package keys. Existing cryptographic algorithms and key selection
 are unchanged.
 
-Run from the `3MF` project directory (JDK 17+ and a desktop session required):
+Run from the `3MF` project directory (JDK 17+ required):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1
@@ -232,3 +232,41 @@ ignore rule.
 Validation: all 11 regression checks pass, including the independent key-reset
 check. The encrypted schema-error fixture was also run against the unpatched
 source to confirm its incorrect acceptance.
+
+## Issue #11: headless CLI execution
+
+[Issue #11](https://github.com/3MFConsortium/3mf_Editor/issues/11) reports that CLI
+execution requires an X11 DISPLAY. Startup constructed a JFrame even with `-C`,
+and structure validation accessed that window's glass pane. Forcing
+`-Djava.awt.headless=true` reproduced a HeadlessException before validation.
+
+MainFrame now holds the editor content and creates its JFrame only in GUI mode.
+CLI startup selects headless AWT before constructing Swing components; shared
+validation and HTML reporting still use lightweight Swing components. Window
+setup, menu updates and the structure-check busy cursor are skipped in CLI mode.
+Directory errors and a missing print job ticket use logging without CLI dialogs.
+The editor retains its window, menus, layout, saved geometry and close behavior.
+
+Run from the `3MF` project directory (JDK 17+ and official fixtures required):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1 -Headless
+```
+
+This extends the existing Secure Content regressions with unencrypted positive
+and negative fixtures and CLI startup errors. It checks default, schema-only,
+structure-only and file-list execution; valid and invalid encrypted models;
+HTML/XML diagnostics; package-key reset; missing input/files/lists/job tickets;
+and a blocked working directory. A Java shutdown check requires headless AWT and zero windows.
+Error-path runs start with `java.awt.headless=false` to verify that CLI startup
+selects headless mode itself. Use `-TestSuiteRoot PATH` to override the checkout.
+Reports remain under `tests/cli/results/secure-content-*`.
+
+With `-EditorSmoke` instead of `-Headless`, the script also checks that GUI startup
+creates a visible editor window with its content, title and menu; this GUI check
+requires a desktop session. The maintained script is already tracked, and the
+new Java helper is not ignored by Git. Generated reports remain ignored.
+
+Validation on Windows/JDK 21: all 18 headless checks, all seven beam object-type
+regressions, and the editor-window smoke check pass. A native Linux run was not
+available; headless JVM mode and zero-window assertions exercise display isolation.

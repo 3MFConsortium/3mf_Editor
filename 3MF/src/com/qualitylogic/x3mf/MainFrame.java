@@ -163,7 +163,7 @@ import org.xml.sax.SAXParseException;
 
 import com.qualitylogic.x3mf.ZipFileUtil.WindowsExplorerComparator;
 
-public class MainFrame extends JFrame implements ActionListener, DocumentListener {
+public class MainFrame extends JPanel implements ActionListener, DocumentListener {
 	/**
 	 * 
 	 */
@@ -285,6 +285,18 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	public static JCheckBox bnumb = new JCheckBox("Triangle #s ");
 	public static JCheckBox bmesh = new JCheckBox("Mesh Wire ");
 	public static JCheckBox bNoUUIDchk = new JCheckBox("Ignore UUID ");
+	// A top-level window exists only in editor mode. Lightweight Swing components
+	// remain available for the shared validation and HTML reporting code in CLI mode.
+	private JFrame window;
+
+	private java.awt.Container getContentPane() {
+		return this;
+	}
+
+	private void disposeWindow() {
+		if (window != null) window.dispose();
+	}
+
 	public MainFrame() {
 		keyinfo = new ArrayList<KeyInfo>();
 		xsdErrorList = new ArrayList<>(); 
@@ -301,13 +313,18 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				}
 			}});
 
+		if (StartUp.brunCli) return;
+		window = new JFrame();
+		window.setContentPane(this);
+		window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
 		getContentPane().setBackground(new Color(102, 205, 170));
 		doScroll.setBackground(new Color(102, 205, 170));
 		doWarn.setBackground(new Color(102, 205, 170));
 		showAlpha.setBackground(new Color(102, 205, 170));
 		showAlpha.setToolTipText("Display the alpha channel as grayscale with black transparent and white opaque.");
-		setIconImage(Toolkit.getDefaultToolkit().getImage(MainFrame.class.getResource("/resources/qe.png")));
-		setTitle("3MF Edit and Test");
+		window.setIconImage(Toolkit.getDefaultToolkit().getImage(MainFrame.class.getResource("/resources/qe.png")));
+		window.setTitle("3MF Edit and Test");
 		getContentPane().setLayout(springLayout);
 		mfPane.setViewportBorder(new BevelBorder(BevelBorder.LOWERED, null, null, null, null));
 
@@ -529,7 +546,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 
 		JMenuBar menuBar = new JMenuBar();
 		menuBar.setBorder(new BevelBorder(BevelBorder.RAISED));
-		setJMenuBar(menuBar);
+		window.setJMenuBar(menuBar);
 
 		JMenu fileM = new JMenu("File");
 		fileM.setHorizontalAlignment(SwingConstants.LEFT);
@@ -781,7 +798,6 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		springLayout.putConstraint(SpringLayout.WEST, showAlpha, 2, SpringLayout.EAST, doWarn);
 
 	}
-	@Override
 	public void dispose() {
 		//save settings on exit
 		setIni();
@@ -797,7 +813,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-		super.dispose();
+		disposeWindow();
 		System.exit(0);
 	}
 	public void start(){
@@ -809,7 +825,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				Files.createDirectories(path);
 			} catch (IOException e) {
 				//fail to create directory
-				if(!StartUp.brunCli){
+				if(StartUp.brunCli){
 					logger.error("Error creating zips directory, zip64 disabled.");
 					e.printStackTrace();
 					zipdir = false;
@@ -890,13 +906,13 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		initiater.addListener(responder);
 		getIni();
 		if(!StartUp.brunCli){
-			this.setBounds(inset, inset, scrSzWid, scrSzHgt);
-			this.setLocation(scrLocX, scrLocY);
-			this.setVisible(true);
+			window.setBounds(inset, inset, scrSzWid, scrSzHgt);
+			window.setLocation(scrLocX, scrLocY);
+			window.setVisible(true);
 			setupFrame();
 			getContentPane().validate();
 			getContentPane().repaint();
-			this.addWindowListener(new java.awt.event.WindowAdapter() {
+			window.addWindowListener(new java.awt.event.WindowAdapter() {
 				@Override
 				public void windowClosing(java.awt.event.WindowEvent windowEvent) {
 					//another close method, clean up ztmp, save settings.
@@ -921,7 +937,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 
 			if(StartUp.fileList.equals("") && StartUp.oneFile.equals("")){
 				logger.error("CLI specified, but neither a file or the file list has been specified. Exiting.");
-				super.dispose();
+				disposeWindow();
 				System.exit(0);
 
 			}
@@ -940,7 +956,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 					} catch (IOException e) {
 						e.printStackTrace();
 					}
-					super.dispose();
+					disposeWindow();
 					System.exit(0);
 				}
 				bChkError = false;
@@ -1056,7 +1072,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			if(!StartUp.fileList.equals("")){
 				if(!new File(StartUp.fileList).exists()){
 					logger.error("File list specified, but not found for: " + StartUp.fileList + "  Exiting");
-					super.dispose();
+					disposeWindow();
 					System.exit(0);
 				}
 				try {
@@ -1226,7 +1242,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				e.printStackTrace();
 			}
 			logger.info("Finished");
-			super.dispose();
+			disposeWindow();
 			System.exit(0);
 
 
@@ -2830,10 +2846,13 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	}
 	//run the structure check
 	private void chk3MfStructure(){
-		MenuSelectionManager.defaultManager().clearSelectedPath();
-		Component glassPane = ((RootPaneContainer)mfPane.getTopLevelAncestor()).getGlassPane();
-		glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-		glassPane.setVisible(true);
+		Component glassPane = null;
+		if (!StartUp.brunCli) {
+			MenuSelectionManager.defaultManager().clearSelectedPath();
+			glassPane = window.getGlassPane();
+			glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+			glassPane.setVisible(true);
+		}
 		try{
 			nfsc = new FileStructureCheck();
 			nfsc.fCurrentFile = currentFile;
@@ -2865,8 +2884,10 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		}catch (Exception e){
 			e.printStackTrace();
 		}finally{
-			glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-			glassPane.setVisible(false);
+			if (glassPane != null) {
+				glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+				glassPane.setVisible(false);
+			}
 
 		}
 	}
@@ -3018,16 +3039,16 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		propDat.username = cusername;
 		propDat.password = cpassword;
 		propDat.writeTxt();
-		int itmp = this.getBounds().height;
+		int itmp = window == null ? 0 : window.getBounds().height;
 		if(itmp > 0)
 			inDat.pscrSzHgt = itmp;
-		itmp = this.getBounds().width;
+		itmp = window == null ? 0 : window.getBounds().width;
 		if(itmp > 0)
 			inDat.pscrSzWid = itmp;
-		itmp = this.getBounds().x;
+		itmp = window == null ? 0 : window.getBounds().x;
 		if(itmp > 0)
 			inDat.pscrLocX = itmp;
-		itmp = this.getBounds().y;
+		itmp = window == null ? 0 : window.getBounds().y;
 		if(itmp > 0)
 			inDat.pscrLocY = itmp;
 		inDat.psclWid = sclWid;
@@ -3077,10 +3098,12 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		bedBuffer = propDat.bedBuffer;
 		align_out_of_bounds_only = propDat.align_out_of_bounds_only;
 		alignOrigin = propDat.alignOrigin;
-		if(bSChkWerrors){
-			doStructureI.setText("Structure Check Override Off");
-		} else {
-			doStructureI.setText("Structure Check Override On");
+		if (!StartUp.brunCli) {
+			if(bSChkWerrors){
+				doStructureI.setText("Structure Check Override Off");
+			} else {
+				doStructureI.setText("Structure Check Override On");
+			}
 		}
 	}
 	public void loadContent(){

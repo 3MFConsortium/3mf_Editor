@@ -117,8 +117,10 @@ logger.info("Error, missing quote(s) in: " + StringUtils.normalizeSpace(stringFr
 							if(pticketLoc != "" && !Files.exists(Paths.get(pticketLoc))){
 								pticketLoc ="";
 								logger.info("Failed to load pticketLoc with " + tmpString + "\nDue to the path not being found.");
-								JOptionPane.showMessageDialog(null, "Info: Could not find " + tmpString + " for api printing, creating and using default jobticket.xml from 3MF Edit jar file."   
-										, "Info: Using default job ticket.", JOptionPane.INFORMATION_MESSAGE);
+								if (!StartUp.brunCli) {
+									JOptionPane.showMessageDialog(null, "Info: Could not find " + tmpString + " for api printing, creating and using default jobticket.xml from 3MF Edit jar file."
+											, "Info: Using default job ticket.", JOptionPane.INFORMATION_MESSAGE);
+								}
 								try {
 								} catch (Exception e) {
 									JOptionPane.showMessageDialog(null, "Error: Could not write " + pticketLoc
