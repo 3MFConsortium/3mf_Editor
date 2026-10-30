@@ -134,7 +134,7 @@ public class FileStructureCheck {
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
 			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "ER_176");
 
 	public FileStructureCheck() {
 	}
@@ -5130,25 +5130,24 @@ public class FileStructureCheck {
 													y2 = verty.get(Integer.parseInt(tst));
 													z2 = vertz.get(Integer.parseInt(tst));
 												}
-												// Check that the length is >=
-												// minlength
+												// Consumers must ignore beams shorter than minlength.
 												Double length = Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)
 														+ (z2 - z1) * (z2 - z1));
 												if (length < minlength) {
-													fErrorReturn += "<br>ER_091: Beam " + (jj + 1)
-															+ " has a length less that the minlength with a length value of "
+													fWarningReturn += "<br>WR_025: Beam " + (jj + 1)
+															+ " has a length less than minlength and must be ignored by consumers; length value: "
 															+ length.toString() + " in file: " + file;
 
-													fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Beam " + (jj + 1)
-															+ " has a length less that the minlength with a length value of "
+													fxmlWarningReturn += "<Issue  issueID=\"WR_025\" severity=\"info\" class=\"structure\" type=\"beam length warning\">";
+													fxmlWarningReturn += "Beam " + (jj + 1)
+															+ " has a length less than minlength and must be ignored by consumers; length value: "
 															+ length.toString() + " in file: " + file;
-													fxmlErrorReturn += "</Issue>";
-													errChk("ER_091");
-													ierCnt++;
-													if (ierCnt > iErrMaxStr) {
-														fErrorReturn += "<br>More than " + iErrMaxStr
-																+ " errors found, stopping..<br>";
+													fxmlWarningReturn += "</Issue>";
+													errChk("WR_025");
+													iwrCnt++;
+													if (iwrCnt > iWrnMaxStr) {
+														fWarningReturn += "<br>More than " + iWrnMaxStr
+																+ " warnings found, stopping..<br>";
 														return;
 													}
 												}
