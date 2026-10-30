@@ -132,7 +132,7 @@ public class FileStructureCheck {
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_177", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
 			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "ER_176");
 
@@ -4703,6 +4703,23 @@ public class FileStructureCheck {
 								String objpidChk = "";
 								Node pMesh = cnode.getParentNode();
 								Node pObj = pMesh.getParentNode();
+								// Core defaults an omitted object type to model.
+								String objectType = "model";
+								if (pObj.getAttributes().getNamedItem("type") != null)
+									objectType = pObj.getAttributes().getNamedItem("type").getTextContent().trim();
+								if (!objectType.equals("model") && !objectType.equals("solidsupport")) {
+									String message = "Beamlattice in file: " + file + " with object id: " + objId
+											+ " has object type '" + objectType + "'; only model or solidsupport is allowed.";
+									fErrorReturn += "<br>ER_177: " + message;
+									fxmlErrorReturn += "<Issue issueID=\"ER_177\" severity=\"high\" class=\"structure\" type=\"invalid object type\">"
+											+ message + "</Issue>";
+									errChk("ER_177");
+									ierCnt++;
+									if (ierCnt > iErrMaxStr) {
+										fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+										return;
+									}
+								}
 								if (pObj.getAttributes().getNamedItem("pid") != null)
 									objpidChk = pObj.getAttributes().getNamedItem("pid").getTextContent().trim();
 
