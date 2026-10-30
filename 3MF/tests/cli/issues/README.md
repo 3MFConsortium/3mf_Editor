@@ -3,6 +3,8 @@
 Keep issue-fix documentation in this file and all `Test-*.ps1` regression scripts
 in `tests/cli/issues/`. Commands below run from the `3MF` project directory. Shared CLI
 utilities remain in `tests/cli/`, alongside the ignored generated reports.
+Java test helper sources live in `tests/src/` and are compiled explicitly by the
+regression scripts.
 
 Runs the 3MF Editor CLI against all model files in all 11 official suites and verifies its XML results using the positive/negative convention in section 5.1 of the [3MF Test Specification v2.4.1](https://github.com/3MFConsortium/test_suites/blob/master/test_specification/3MF_Test_Specification_v2_4_1.docx). Reads Appendix C directly from the DOCX to check that the checkout contains each specified suite/scenario/iteration. Duplicate Appendix C rows are treated as one membership entry.
 
@@ -191,3 +193,42 @@ primary-issue selection. Use `-TestSuiteRoot PATH` to override the default
 
 Validation: all seven object-type cases pass, as do all twelve existing cases
 in `tests/cli/issues/Test-BeamMinlength.ps1`.
+
+## Issue #8: Secure Content decryption in CLI validation
+
+[Issue #8](https://github.com/3MFConsortium/3mf_Editor/issues/8) reports that CLI
+validation does not decrypt Secure Content. Package keys were loaded by the GUI's
+thumbnail setup, which `cliOpenFile` never runs. Schema validation silently skipped
+encrypted XML, and structure checks could not inspect the encrypted models.
+
+Package extraction now loads the keystore before validation, for both single-file
+(`-F`) and file-list (`-L`) execution. The key list is cleared before keystore
+discovery, including when root relationships are absent, so later packages cannot
+reuse previous package keys. Existing cryptographic algorithms and key selection
+are unchanged.
+
+Run from the `3MF` project directory (JDK 17+ and a desktop session required):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1
+```
+
+Use `-TestSuiteRoot PATH` to override the default official fixture checkout beside
+the editor repository. The script compiles current sources and the shared Java
+fixture helper, then checks default, schema-only and structure-only CLI modes,
+SHA-1 and SHA-256 wrapping, deflated and uncompressed content, and multiple files
+in one process. Generated fixtures contain an authenticated encrypted schema error
+or out-of-range vertex reference; their specific diagnostics must appear in both
+HTML and XML. A separate opening-path check verifies key loading and clearing,
+including a package without a keystore and absent root relationships.
+
+The unpatched source incorrectly reports `Pass` for the encrypted schema-error
+fixture with `-C -F schema.3mf -V`; the patched source reports `Fail` and identifies
+`invalid-unit`. Reports and generated fixtures remain under
+`tests/cli/results/secure-content-*`. A narrow exception in `tests/cli/.gitignore`
+keeps the new regression script visible despite the repository's issue-directory
+ignore rule.
+
+Validation: all 11 regression checks pass, including the independent key-reset
+check. The encrypted schema-error fixture was also run against the unpatched
+source to confirm its incorrect acceptance.

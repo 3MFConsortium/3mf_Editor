@@ -2748,6 +2748,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				FileUtils.cleanDirectory(ztmp);
 			}
 			ZipFileUtil.decompressZip(currentFile,"ztmp");
+			// CLI opening does not build the thumbnail tree, which also loads keys.
+			// Load them here so schema and structure validation can decrypt parts.
+			findKeystore();
 			checkRel0();
 			loadContent();
 			//ZipFileUtil.decompressZipAlt(currentFile,"ztmp");
@@ -4148,11 +4151,12 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	//locate the keystore, if it exists.
 	//if found, load the resource data for decrypting files.
 	private void findKeystore(){
+		// Never retain a previous package's keys, even if relationships are missing.
+		keyinfo.clear();
 		try {
 			//We are not trying to debug the structure here. If we do not find something, just return.
 			File file = new File("ztmp/_rels/.rels");
 			if(!file.exists()) return;
-			keyinfo.clear();
 			String xfile, fFile = "";
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
