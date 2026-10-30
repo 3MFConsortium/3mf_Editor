@@ -312,3 +312,69 @@ does not change ignore rules.
 Validation on Windows/JDK 21: all 35 reference-whitespace regression cases and
 all 11 existing Secure Content regression checks pass. The changed Java source
 and this README also pass `git diff --check`.
+
+## Issue #14 investigation: XML without line breaks
+
+[Issue #14](https://github.com/3MFConsortium/3mf_Editor/issues/14) reports an
+editor hang displaying a 29 MB XML model without line breaks. No sample package
+is attached to the issue, and there were no comments when investigated.
+This investigation changes no production code.
+
+The package-tree selection handler in `MainFrame.java` rejects parts larger than
+75,000,000 bytes, then passes smaller parts to `xmlEd.setText(...)` on the Swing
+event dispatch thread. `XmlView` extends Swing's non-wrapping `PlainView`.
+On JDK 21, `DefaultEditorKit.read` inserts text in chunks. Each insertion invokes
+`PlainView.updateDamage`, which measures the growing longest line through
+`getLineWidth` and `Utilities.getTabbedTextWidth`. The repeated measurements
+produce approximately quadratic loading cost for a large single line and block
+the UI. Two independent 29 MB probes timed out in this loading path; their thread
+dumps identify `PlainView.getLineWidth`, not XML parsing or package extraction.
+
+There is also a separate paint cost: `XmlView.drawUnselectedText` scans the
+provided text with six regular expressions and builds two TreeMaps of matches.
+The synthetic compact control still required 9.4 seconds to paint after bypassing
+incremental loading. Improving loading alone therefore leaves visible stalls.
+
+Measurements on Windows, Zulu OpenJDK 21.0.3, `-Xmx1g`, headless Swing, with a
+1000 by 700 pixel image, using repeated XML vertex elements (decimal MB):
+
+| Input | Load | First paint |
+| --- | ---: | ---: |
+| 0.25 MB, single line | 90 ms | 205 ms |
+| 1 MB, single line | 515 ms | 408 ms |
+| 4 MB, single line | 6,428 ms | 1,222 ms |
+| 29 MB, single line | timed out at 20 seconds | not reached |
+| 29 MB, newline after each vertex | 2,360 ms | 10 ms |
+| 29 MB, single line, detached document populated in one insertion | 118 ms | 9,412 ms |
+
+These observations establish a performance problem, not a fixed byte threshold.
+The effective limit depends on line length, XML token density, font, hardware,
+JDK, available heap, and acceptable UI delay. The reported 29 MB lies well below
+the existing file-size guard. The probe isolates the real editor component but
+does not open an actual package or validate the generated mesh; this is not an
+end-to-end reproduction of the reporter's unavailable model.
+
+Recommended next implementation: check maximum line length before calling
+`setText` and refuse unsafe display with a clear message. Select the line-length
+budget explicitly rather than treating 29 MB as a universal boundary. A broader
+performance fix should bulk-load a detached document and bound highlighting and
+measurement work to visible text. Any pretty-print-and-save option should be
+explicit, run before display, and preserve the original until the user saves.
+The existing pretty-print menu operates on text already loaded into the editor,
+so it cannot rescue the blocked initial load.
+
+Reproduce from the `3MF` project directory (JDK 17+; no official fixtures needed):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-LongXmlLines.ps1
+```
+
+The script compiles only the four editor component classes and
+`tests/src/LongLineProbe.java`, then runs each case in a separate headless JVM.
+The internal watchdog dumps the Swing thread and exits 124 on timeout;
+`-TimeoutSeconds` changes its default 20-second budget. The outer harness also
+enforces a process timeout. This is a measurement/reproduction harness, not a
+pass/fail conformance check; inspect `results.csv` and each case's stdout/stderr.
+Logs remain under ignored `tests/cli/results/long-xml-lines-*`. Both new source
+files are visible to Git under the current local ignore rules; no ignore rules
+were changed by this investigation.
