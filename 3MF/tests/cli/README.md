@@ -66,6 +66,18 @@ Secure Content cases use the editor's existing decryption behavior and the offic
 
 ## Test the runner itself
 
+To verify alternative object references (issue #3), run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Test-AlternativeReferences.ps1
+```
+
+This compiles the current sources and checks all 11 official `P_XPX_0720` fixtures,
+plus generated cases for same-model forward references, missing objects, references
+to the wrong model, and nested alternatives. It uses the same default test-suite
+checkout as the conformance runner; override it with `-TestSuiteRoot PATH`.
+Reports are saved under `tests/cli/results/alternative-references-*`.
+
 To match an existing completed run to the scenario definitions and criteria, without rerunning the CLI:
 
 ```powershell

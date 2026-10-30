@@ -5701,18 +5701,24 @@ public class FileStructureCheck {
 							String altUUID = cnode.getAttributes().getNamedItem("UUID").getTextContent();
 							idUuid.add(altUUID);
 							fileUuid.add(file);
-							// Searches for matching object ID in any file
+							// Object IDs are local to the model selected by path (or this model).
 							String objectid = cnode.getAttributes().getNamedItem("objectid").getTextContent().trim();
+							String fileName = file;
+							if (cnode.getAttributes().getNamedItem("path") != null) {
+								fileName = cnode.getAttributes().getNamedItem("path").getTextContent();
+							}
 							String id = "";
 							if (node.getParentNode().getAttributes().getNamedItem("id").getTextContent() != null) {
 								id = node.getParentNode().getAttributes().getNamedItem("id").getTextContent();
 							}
 							try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 								boolean fndObj = false;
-								boolean alternativeFirst = false;
 								Enumeration<? extends ZipEntry> entries = zfile.entries();
 								while (entries.hasMoreElements()) {
 									ZipEntry entry = entries.nextElement();
+									if (!fileName.equals("/" + entry.getName())) {
+										continue;
+									}
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
 									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
@@ -5730,13 +5736,6 @@ public class FileStructureCheck {
 												fndObj = true;
 												objIdListRef.add("/" + entry.getName() + "|" + objectid);
 												NodeList objectChildren = nObjy.item(ico).getChildNodes();
-												String fileName;
-												if (cnode.getAttributes().getNamedItem("path") != null) {
-													fileName = cnode.getAttributes().getNamedItem("path")
-															.getTextContent();
-												} else {
-													fileName = file;
-												}
 												for (int k = 0; k < objectChildren.getLength(); k++) {
 													if (objectChildren.item(k).getNodeName().contains("alternative")) {
 														fErrorReturn += "<br>ER_140: Object " + objectid + " in "
@@ -5758,7 +5757,7 @@ public class FileStructureCheck {
 											}
 											if (id.contentEquals(nObjy.item(ico).getAttributes().getNamedItem("id")
 													.getTextContent().trim()) && !fndObj
-													&& file.contains(entry.getName())) {
+													&& file.equals(fileName)) {
 												fErrorReturn += "<br>ER_141: Alternative with objectid = " + objectid
 														+ " is positioned before the referenced object";
 												fxmlErrorReturn += "<Issue  issueID=\"ER_141\" severity=\"high\" class=\"structure\" type=\"ID error\">";
