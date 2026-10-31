@@ -50,6 +50,9 @@ public class FileStructureCheck {
 	public int iErrMaxStr = 9;
 	public int iWrnMaxStr = 9;
 	private final Set<String> referenceWhitespaceParts = new HashSet<String>();
+	private GeometryCheck geometry;
+	private boolean geometryLimitReported;
+	public boolean validationIncomplete;
 	public boolean bnonSecure = true;
 	private String sContent;
 	private NodeList nType_default;
@@ -136,9 +139,9 @@ public class FileStructureCheck {
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_177", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "ER_176");
 
 	public FileStructureCheck() {
 	}
@@ -224,24 +227,38 @@ public class FileStructureCheck {
 		String sRootModel = "";
 		ierCnt = 0;
 		iwrCnt = 0;
+		validationIncomplete = false;
+		geometryLimitReported = false;
+		geometry = new GeometryCheck(this::geometryIssue);
 		referenceWhitespaceParts.clear();
 		// 1) does the zip contain a [Content_Types].xml
 		try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 			boolean bContent = false;
 			boolean bRels = false;
+			// Build a complete inventory independently of content skips and diagnostic limits.
+			entryNames.clear();
+			bentryNames.clear();
+			Enumeration<? extends ZipEntry> inventory = zfile.entries();
+			while (inventory.hasMoreElements()) {
+				String name = inventory.nextElement().getName();
+				entryNames.add("/" + name);
+				bentryNames.add(name.endsWith(".rels") || name.endsWith("/"));
+			}
 			Enumeration<? extends ZipEntry> entries = zfile.entries();
 			while (entries.hasMoreElements()) {
 				System.gc();
 				ZipEntry entry = entries.nextElement();
+				String name = entry.getName();
 				if (entry.getSize() > 200000000) {
 					if (!StartUp.brunCli) {
 						JOptionPane.showMessageDialog(null,
 								"Part is too large for structural check: " + entry.getName(),
 								"Part too large for structural check.", JOptionPane.WARNING_MESSAGE);
 					}
-					fWarningReturn += "<br>WR_008: " + entry.getName() + " was skipped as too large.<br>";
+					validationIncomplete = true;
+					fWarningReturn += "<br>WR_008: Validation incomplete: " + StringEscapeUtils.escapeHtml4(entry.getName()) + " was skipped as too large for structural content checks (limit 200000000 bytes).<br>";
 					fxmlWarningReturn += "<Issue  issueID=\"WR_008\" severity=\"info\" class=\"structure\" type=\"memory limit\">";
-					fxmlWarningReturn += entry.getName() + " was skipped as too large.";
+					fxmlWarningReturn += "Validation incomplete: " + StringEscapeUtils.escapeXml11(entry.getName()) + " was skipped as too large for structural content checks (limit 200000000 bytes).";
 					fxmlWarningReturn += "</Issue>";
 					errChk("WR_008");
 					iwrCnt++;
@@ -251,13 +268,6 @@ public class FileStructureCheck {
 					}
 					continue;
 				}
-
-				String name = entry.getName();
-				entryNames.add("/" + name);
-				if (name.endsWith(".rels") || name.endsWith("/"))
-					bentryNames.add(true);
-				else
-					bentryNames.add(false);
 
 				{
 					// do the keystore check
@@ -1530,6 +1540,7 @@ public class FileStructureCheck {
 					idUsed.clear();
 
 					fillUuid(doc, ename);
+					geometry.addModel(doc, ename, zfile, this::declaredContentType);
 
 					// if they are empty, they will kick out with no duplicates
 					// check for duplicate basematerials ids.
@@ -2939,6 +2950,7 @@ public class FileStructureCheck {
 					}
 				} // end of models looping
 			}
+			geometry.finish(sRootModel);
 			for (int i = 0; i < bentryNames.size(); i++) {
 				if (!bentryNames.get(i)) {
 					String addCom = "";
@@ -7365,6 +7377,34 @@ public class FileStructureCheck {
 			iErr = errList.indexOf(err);
 		}
 
+	}
+
+	private void geometryIssue(String code, boolean warning, String message) {
+		if (code.equals("WR_029")) {
+			validationIncomplete = true;
+			// Preserve one incomplete-validation summary even after the warning cap.
+			if (geometryLimitReported) return;
+			geometryLimitReported = true;
+		} else if (warning ? iwrCnt >= Math.max(1, iWrnMaxStr) : ierCnt >= Math.max(1, iErrMaxStr)) return;
+		String xml = "<Issue issueID=\"" + code + "\" severity=\"" + (warning ? "info" : "high")
+				+ "\" class=\"structure\" type=\"geometry\">" + StringEscapeUtils.escapeXml11(message) + "</Issue>";
+		String html = "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		if (warning) { fxmlWarningReturn += xml; fWarningReturn += html; iwrCnt++; }
+		else { fxmlErrorReturn += xml; fErrorReturn += html; ierCnt++; }
+		errChk(code);
+	}
+
+	private String declaredContentType(String part) {
+		if (nType_override != null) for (int i = 0; i < nType_override.getLength(); i++) {
+			Element e = (Element)nType_override.item(i);
+			if (part.equals(GeometryCheck.part("/", e.getAttribute("PartName")))) return e.getAttribute("ContentType").trim();
+		}
+		int dot = part.lastIndexOf('.');
+		if (dot >= 0 && nType_default != null) for (int i = 0; i < nType_default.getLength(); i++) {
+			Element e = (Element)nType_default.item(i);
+			if (part.substring(dot + 1).equalsIgnoreCase(e.getAttribute("Extension"))) return e.getAttribute("ContentType").trim();
+		}
+		return "";
 	}
 
 	private boolean overRideFileCheck(String file) {

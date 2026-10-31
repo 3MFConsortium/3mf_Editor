@@ -3,10 +3,257 @@
 Keep issue-fix documentation in this file and all `Test-*.ps1` regression scripts
 in `tests/cli/issues/`. Commands below run from the `3MF` project directory. Shared CLI
 utilities remain in `tests/cli/`, alongside the ignored generated reports.
-Java test helper sources live in `tests/src/` and are compiled explicitly by the
+Java test helper sources live in `tests/src/` and `tests/cli/` and are compiled explicitly by the
 regression scripts.
 
 Runs the 3MF Editor CLI against all model files in all 11 official suites and verifies its XML results using the positive/negative convention in section 5.1 of the [3MF Test Specification v2.4.1](https://github.com/3MFConsortium/test_suites/blob/master/test_specification/3MF_Test_Specification_v2_4_1.docx). Reads Appendix C directly from the DOCX to check that the checkout contains each specified suite/scenario/iteration. Duplicate Appendix C rows are treated as one membership entry.
+
+## Issue #10 fix: size limits and geometry checks
+
+The recommendations below are implemented in `GeometryCheck.java`, integrated
+with `FileStructureCheck.java` and the existing XML/HTML CLI reports:
+
+| Diagnostic | Resulting behavior |
+| --- | --- |
+| `WR_008` | All ZIP part names remain in the inventory, even when content exceeds the unchanged 200,000,000-byte structural limit. Reports explicitly say validation is incomplete; existing oversized parts no longer produce `ER_015`/`ER_027`. This warning remains visible with `-W`. |
+| `ER_178` | Reject non-manifold indexed edges in ordinary and displacement base meshes of type `model` or `solidsupport`. |
+| `ER_179` | Reject adjacent triangles traversing a shared edge in the same direction. |
+| `ER_180` | Reject a consistently wound, closed, single connected base mesh with negative signed volume. Mirroring never repairs or invalidates its intrinsic winding. |
+| `ER_181` | Reject displacement images whose PNG signature or effective package content type is inconsistent with PNG. Content-type overrides take precedence over defaults. The bitmap is not decoded. |
+| `ER_182` | A part above the unchanged 514,215,936-byte schema limit explicitly fails with a validation-limit diagnostic, rather than being skipped without affecting the result. |
+| `WR_027` | Warn for singular or nearly singular individual and composed transforms. A negative determinant alone remains valid. |
+| `WR_028` | Warn when a printable instance's transformed ordinary base mesh extends into a negative coordinate. Compose build/component matrices in row-vector order, resolve Production paths by namespace, convert part units, and examine referenced triangle vertices rather than transformed bounding boxes or unused vertices. No printer-specific bed limits are assumed. |
+| `WR_029` | Explicitly report incomplete geometry checks when a budget is reached or an encrypted displacement image cannot be inspected. One summary remains available even after the warning limit. |
+
+Follow-up: the saved GUI setting `bdoWarn = "true"` means **Hide Warnings**.
+It previously hid `WR_028` for `N_XPM_0421_01.3mf` and left a misleading green
+"No structural errors" message. The shared report presenter now shows an amber
+warning status with its diagnostic IDs when details are hidden. It preserves
+warning diagnostics in XML independently of GUI preferences or CLI `-W`, so the
+same model remains `Warning` in both single-file and list modes. `-W` and **Hide
+Warnings** filter the detail text; they do not turn a warning into `Pass`.
+Disabling **Hide Warnings** shows the full placement diagnostic, including
+minimum coordinates `(-10.1, -10.1, 30.1)`. No green success message is emitted
+for a result with warnings. Positive results still show green success, and
+placement remains a warning rather than a hard format error.
+
+Targeted reproduction from the `3MF` directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-NegativePlacement.ps1
+```
+
+This compiles production code against Java 8 APIs, uses the actual official
+fixture with `tests/cli/StructureWarningTest.java` to test the GUI presenter
+headlessly, and runs six CLI cases against fresh sources. All ten presenter
+checks (GUI/CLI preference combinations, a positive result after a warning, and
+an error control) and six CLI checks pass. The CLI checks cover single-file and
+list modes, both warning settings, HTML/XML status, and positive controls.
+Reports are retained under ignored `tests/cli/results/negative-placement-*`;
+the new helper and regression script are not ignored. The test does not open
+an interactive editor or change the user's saved settings.
+
+The topology rules preserve the Core exceptions for `support`, `surface`, and
+`other`. Low-resolution meshes backed by required slice data are excluded from
+these fabrication checks, including when an ancestor supplies the authoritative
+slice data. The same mesh is still checked if also used independently without
+that slice context. Existing slice-plane restrictions and reference validation
+remain active. Placement ignores non-printable build items and does not use a
+non-root model's build list as another print job.
+
+The helper bounds retained vertices, triangles, objects and references to
+500,000 total elements, with at most 100,000 component visits and 128 levels of
+descent. It releases temporary edge tables per mesh, deduplicates diagnostics,
+and respects the existing report limits. Signed volume is calculated about a
+nearby origin with normalized coordinates and compensated summation, avoiding
+cancellation for translated models. Near-singularity uses a scale-normalized
+determinant; placement uses a relative tolerance of `1e-9` per coordinate axis.
+
+This implements base-mesh validation, not complete constructive geometry.
+Volume classification deliberately does not reject disconnected or nested
+shell combinations on the sign of their aggregate volume; valid hollow meshes
+are preserved. General Positive-fill evaluation and self-intersection resolution
+remain outside scope. Displacement-surface geometry, slice contours and unknown
+shape representations are not evaluated for final bounds or volume. A PNG
+signature check does not establish that the entire image decodes correctly.
+
+Run from the `3MF` project directory (JDK 17+, official fixture checkout):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ToolLimitations.ps1
+```
+
+The script accepts `-TestSuiteRoot PATH`, `-HeapMB` (default 2048) and
+`-TimeoutSeconds` (default 90). It compiles production sources with `--release 8`
+to check the IDE/CI API and bytecode target, and separately compiles the independent
+`tests/cli/GeometryCheckTest.java` helper with `--release 17`, then runs unchanged official fixtures
+in isolated JVMs with schema/structure validation and UUID checking enabled.
+The helper covers winding, manifold edges, object-type exceptions, a nested
+cavity, mirrors, stable volume calculations, composed transforms and part units,
+slice inheritance, reused objects, non-printable items, bounded traversal and
+image signatures/content types. Additional CLI checks exercise `-W` with the
+large positive fixture and a generated valid model padded to 514,215,937 bytes
+to test the schema guard. Generated large extracted files remain in the ignored
+results directory.
+
+Expectations now follow the diagnostic policy above: `_0416_02` and displacement
+`_3314_03` are accepted as valid mirrors; placement and singularity produce
+Warning; inverted meshes and reversed faces produce Fail. The historical `N_`
+polarity is not used to require an invalid mirror rejection. Missing `_3314_09`
+is recorded in `summary.json` as unavailable and is not counted as tested; any
+other missing fixture is an error. CSV, JUnit, summary JSON, HTML/XML reports,
+compile output, helper output and process logs remain under
+`tests/cli/results/tool-limitations-*`.
+
+Known official-suite mismatch: `N_DPX_3314_07.3mf` (determinant zero) still
+produces `Warning` / `WR_027`, whereas the v2.4.1 negative-test criteria expect
+an error. `N_XPM_0421_01.3mf` likewise produces `Warning` / `WR_028`, not `Fail`.
+The targeted regression explicitly verifies this warning policy; passing that
+regression does not establish compliance with these official negative-case
+expectations. The full conformance runner continues to report such warnings on
+negative cases as expectation failures. Nearly singular transforms share the
+same warning policy. These limitations are retained explicitly rather than
+claiming that all issue #10 fixtures satisfy the official suite.
+
+Validation on Windows/Zulu OpenJDK 21.0.3: 43 independent geometry checks,
+22 available official cases, both limit-reporting CLI checks, the existing
+25 transform regressions and 18 headless secure-content checks pass. No full
+conformance suite or interactive GUI run was performed. The new source/helper
+files and regression script are not Git-ignored; generated evidence is ignored.
+The project `.gitignore` also excludes the temporary `/zips/` and `/ztmp/`
+folders. `git diff --check` passes.
+
+Build compatibility: the IDE settings and GitHub workflows target Java 8.
+The PNG signature reader uses a fixed eight-byte read loop, preserving short-file
+handling without `InputStream.readNBytes` (unavailable on Java 8). Compiling only
+with a newer JDK's default target had previously hidden this build failure. The
+regression command above now enforces Java 8 APIs and class files for production;
+its test helper and regression runner still require JDK 17+.
+
+### Original investigation before the fix
+
+[Issue #10](https://github.com/3MFConsortium/3mf_Editor/issues/10), checked live
+on 2026-10-31, was open and had no comments. Before this fix, its five reported
+limitations were partly reproducible. The original investigation changed no
+production code. Baseline tests used Windows, Zulu OpenJDK 21.0.3, a 2 GiB Java heap,
+editor revision `fa8d26de6ad5758a9d8fe62f96961fd70385a611`, and official fixture
+checkout `a63f4bf07c4ab287c8f84f1cdeab8ee92333a577`.
+
+### Baseline results
+
+| Reported area / fixtures | Baseline CLI result | Finding |
+| --- | --- | --- |
+| Large positive `P_XPM_0909_04` (listed twice in the issue) | Fail: `ER_015`, `ER_027`, `WR_008` | Size limitation persists; missing-file diagnostics are misleading. No `ER_014` or out-of-memory crash occurred in this run. |
+| Negative volume `N_XPM_0416_01`, `_02`, `_03` | All Pass, no issues | Negative base-mesh volumes are undetected in `_01` and `_03`. `_02` has positive volume and a mirror transform; see the specification caveat below. |
+| Inward face `N_XPM_0418_01` | Pass, no issues | Missing triangle-orientation check; total signed volume alone would not catch this case. |
+| Negative placement `N_XPM_0421_01` | Pass, no issues | Transformed geometry bounds are not checked. |
+| Displacement `N_DPX_3314_02`, `_03`, `_04`, `_07` | All Pass, no issues | Negative base volumes (`_02`, `_04`) and a singular transform (`_07`) are undetected. `_03` is another mirror-transform caveat. |
+| Displacement `N_DPX_3314_06` | Fail: `ER_153` | This specific fixture is now rejected for non-unique triangle vertex references; this does not establish general manifold validation. |
+| Displacement `N_DPX_3314_09` | Not run: missing | No `_09` file exists in this checkout, although the issue and test specification reference it. |
+| Nearby displacement `_05`, `_08` | Both Pass, no issues | Additional gaps: inconsistent face orientation in `_05`; a JPEG displacement image in `_08`. |
+| Core positive `P_XPM_0101_01`, transforms `P_XPM_0910_01` through `_06`, displacement positive `P_DPX_3200_02` | All eight Pass | Relevant positive acceptance controls. |
+| Displacement negative `N_DPX_3314_01` | Fail: `ER_144` | Control confirms required-extension validation is active. |
+
+The 23 requested cases produce **10 expectation matches, 12 mismatches, and one
+missing-fixture error** using the existing `P_`/`N_` acceptance convention.
+All 22 available fixtures complete without process errors or timeouts. The 12
+mismatches are not 12 independently confirmed specification violations: the
+historical test expectations need the interpretation below.
+
+### Causes and specification interpretation
+
+`FileStructureCheck.java` skips entries larger than **200,000,000 bytes before
+adding their names to `entryNames`** (around lines 236-263). Relationship checks
+subsequently consult that incomplete inventory (for example, `ER_015` around
+line 1120), so an existing oversized part is reported as missing. The named
+fixture's model part is **380,470,980 bytes** uncompressed. The skip also emits
+`WR_008`; increasing `-Xmx` does not remove this hard limit. There are separate
+limits in `MainFrame.java`: **75,000,000 bytes** for XML editor display and
+**514,215,936 bytes** for schema validation. The latter silently continues past
+an oversized part in CLI mode after logging it. The named fixture is below that
+schema limit but above both display and structure limits. These are separate
+paths; this run exercises CLI validation, not GUI loading.
+
+The ordinary mesh path in `fillUuid` counts vertices and validates triangle
+indices and property references. It does not calculate signed volume, shared
+edge incidence/direction, or final transformed bounds. Existing transform checks
+collect slice-plane matrix violations and apply them only for slice-only objects;
+they do not compose the object/component/build transforms into printable bounds.
+The displacement path checks references, counts and other structural rules. Its
+`ER_175` scalar-product calculation checks displacement vectors relative to a
+triangle normal; it is not a mesh-volume or adjacent-face orientation check.
+
+An independent, read-only inspection of these small fixture meshes found:
+
+- `N_XPM_0416_01` and `_03`, and `N_DPX_3314_02` and `_04`, have signed base
+  mesh volume **-1,000,010** in cubic model units. They are closed by indexed
+  edge incidence and have consistent winding, demonstrating why edge checks
+  alone would miss an entirely inverted shell.
+- `N_XPM_0418_01` has positive summed volume **113,071.95074**, but three shared
+  edges have inconsistent direction. Displacement `_05` likewise contains an
+  object with three such edges despite positive summed volume. Checking only
+  total signed volume would miss the reversed face.
+- `N_XPM_0421_01` has an identity linear transform and translation
+  `(-10.1, -10.1, 30.1)`. Its mesh bounds become
+  X `[-10.1, 89.899]`, Y `[-10.1, 29.9]`, Z `[30.1, 64.74]`.
+- Displacement `_07` has an all-zero linear transform: determinant **0**.
+- `N_XPM_0416_02` and displacement `_03` have positive base volume and
+  determinant **-1**. These must not be rejected merely for having a negative
+  determinant.
+- Displacement `_06` also has four non-manifold indexed edges, but the CLI
+  rejection is specifically for duplicate indices. `_08` references
+  `/3D/textures/new_rgb_text_image.jpg`, declared as `image/jpeg` in the package.
+  There is no `ContentType` attribute on its `displacement2d` elements, despite
+  the older test scenario wording.
+
+The current [Core 1.4.0 specification, section 3.3](https://github.com/3MFConsortium/spec_core/blob/1.4.0/3MF%20Core%20Specification.md#33-3d-matrices)
+requires a mirrored shape to preserve its volume sign. A negative determinant
+is therefore not itself invalid. The same section expresses nonsingularity,
+positive final volume, and positive-octant placement as **SHOULD** requirements;
+the placement fixture also refers to a printer's printable area, which the CLI
+does not know. A future placement/singularity check needs an explicit diagnostic
+policy, rather than automatically converting every historical `N_` file into a
+hard format error. The v2.4.1 test specification calls `_0416_02` and displacement
+`_3314_03` negative-determinant cases, so those expectations need reconciliation
+with the current Core text.
+
+[Core section 4.1](https://github.com/3MFConsortium/spec_core/blob/1.4.0/3MF%20Core%20Specification.md#41-meshes)
+requires manifold edges and consistent outward-facing triangle normals for
+`model` and `solidsupport` meshes, with explicit exceptions for other object
+types. These base-mesh checks do not require a renderer. Nested shells,
+self-intersections, the Positive fill rule, and authoritative slice data need
+care when implementing a general validator; a single summed volume or a rule
+that rejects every mirrored transform is insufficient.
+The [Displacement 1.0.0 specification, section 3.1](https://github.com/3MFConsortium/spec_displacement/blob/master/3MF%20Displacement%20Extension.md#31-displacement2d)
+specifies PNG displacement images. Actual displacement-surface volume or bounds
+would additionally require evaluating the image, displacement vectors, heights,
+offsets and stitching rules. The base-mesh measurements above do not claim to
+measure the resulting displaced surface.
+
+### Baseline evidence and recommendations
+
+Investigation evidence is retained in
+`tests/cli/results/tool-limitations-20261031-081303-7eac6635/`, including
+`geometry-probe.ps1` and `geometry.jsonl` for the independent base-mesh inspection.
+That probe handles only direct indexed meshes and records individual transform
+determinants; it is not a renderer or a general composed-transform validator.
+
+The original recommended implementation order was:
+
+1. Keep the complete ZIP part inventory even when skipping content validation;
+   report incomplete validation explicitly, without spurious missing-file errors.
+   Do not simply raise the memory guards.
+2. Add shared base-mesh topology and winding checks, with object-type and slice
+   semantics, for ordinary and displacement meshes. Handle fully inverted shells
+   separately from local reversed faces.
+3. Define a warning/error policy for singular transforms and placement, then
+   evaluate composed transforms with the required mirror orientation handling.
+4. Validate displacement image format independently from geometry; evaluate the
+   displaced surface only if that broader capability is intended.
+
+In that baseline run, all eight positive controls and both detectable negative
+controls passed their acceptance expectations. No full conformance suite or
+interactive GUI test was run.
 
 ## Issue #19 investigation: documentation link points to a personal path
 

@@ -2801,6 +2801,15 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 				//limit the size of what we try to validate. I have passed with 341MB.
 				BasicFileAttributes attr = Files.readAttributes(f.toPath(), BasicFileAttributes.class);
 				if(attr.size()> 514215936 ){
+					// A skipped schema check must never produce a successful validation report.
+					bChkError = true;
+					String limitMessage = "Validation incomplete: part " + f.getName()
+							+ " exceeds the schema validation limit of 514215936 bytes.";
+					fxmlSchemaReturn += "<Issue issueID=\"ER_182\" severity=\"moderate\" class=\"schema\" type=\"validation limit\">"
+							+ org.apache.commons.lang3.StringEscapeUtils.escapeXml11(limitMessage) + "</Issue>";
+					saveForConsole += "<font color='red'><br>ER_182: "
+							+ org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(limitMessage) + "</font><br>";
+					addToConsole(saveForConsole);
 					if(!StartUp.brunCli){
 						JOptionPane.showMessageDialog(null, "Part is too large for validation: " + f.getName()   
 						, "Part too large for validation.", JOptionPane.WARNING_MESSAGE);
@@ -2869,27 +2878,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			nfsc.iErrMaxStr = iErrMaxS;
 			nfsc.keyinfo = keyinfo;
 			nfsc.checkFile();
-			String nsecure = " which appears to be using encryption.";
-			if(nfsc.bnonSecure){
-				nsecure = " which appears to not be using encryption.";
-			}
-			if(nfsc.fErrorReturn != ""){
-				bStructError = true;
-				saveForConsole += "<font color='red'>" + nfsc.fErrorReturn + "<br><br>Structural check failure on " + currentFile + nsecure + "</font><br>";
-				addToConsole(saveForConsole);
-				fxmlErrorReturn = nfsc.fxmlErrorReturn.replace("<br>", "");
-			} else {
-				saveForConsole += "<font color='green'><br>No structural errors found in " + currentFile + nsecure + "</font><br>";
-				addToConsole(saveForConsole);
-			}
-			//if the editor has bdoWarn unchecked and it is not a cli run, or the cli has hide warnings set, skip
-			if(nfsc.fWarningReturn != "" && ((!bdoWarn && !StartUp.brunCli) || (!StartUp.bHideWarnCLI && StartUp.brunCli)) ){
-				bStructError = true;
-				saveForConsole += "<font color='DAA520'><br><br>Warnings (may be intentional edits)<br>" + nfsc.fWarningReturn + "<br><br>Structural check warning on " + currentFile + "</font><br>";
-				addToConsole(saveForConsole);
-				fxmlWarningReturn = nfsc.fxmlWarningReturn.replace("<br>", "");
-			}
-			sErr = nfsc.sErr;
+			reportStructureResult(nfsc);
 		}catch (Exception e){
 			e.printStackTrace();
 		}finally{
@@ -2899,6 +2888,38 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			}
 
 		}
+	}
+
+	// Presentation preferences must not change a validation result or hide its status.
+	void reportStructureResult(FileStructureCheck check) {
+		boolean errors = !check.fErrorReturn.isEmpty();
+		boolean warnings = !check.fWarningReturn.isEmpty();
+		bStructError = errors || warnings;
+		fxmlErrorReturn = check.fxmlErrorReturn.replace("<br>", "");
+		fxmlWarningReturn = check.fxmlWarningReturn.replace("<br>", "");
+		sErr = check.sErr;
+		String file = org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(check.fCurrentFile);
+		String nsecure = check.bnonSecure ? " which appears to not be using encryption." : " which appears to be using encryption.";
+		if (errors) {
+			saveForConsole += "<font color='red'>" + check.fErrorReturn + "<br><br>Structural check failure on " + file + nsecure + "</font><br>";
+		} else if (!warnings) {
+			saveForConsole += "<font color='green'><br>No structural errors found in " + file + nsecure + "</font><br>";
+		}
+		if (warnings) {
+			boolean details = check.validationIncomplete || (StartUp.brunCli ? !StartUp.bHideWarnCLI : !bdoWarn);
+			saveForConsole += "<font color='DAA520'><br><br>Structural check warning on " + file;
+			if (details) {
+				saveForConsole += "<br>" + check.fWarningReturn;
+			} else {
+				java.util.Set<String> codes = new java.util.LinkedHashSet<String>();
+				java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("issueID=\"(WR_[0-9]+)\"").matcher(fxmlWarningReturn);
+				while (matcher.find()) codes.add(matcher.group(1));
+				if (!codes.isEmpty()) saveForConsole += " (" + String.join(", ", codes) + ")";
+				saveForConsole += ". Warning details are hidden; disable Hide Warnings to view them.";
+			}
+			saveForConsole += "</font><br>";
+		}
+		addToConsole(saveForConsole);
 	}
 
 	/**
