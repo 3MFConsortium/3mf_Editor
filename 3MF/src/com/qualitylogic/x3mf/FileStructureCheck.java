@@ -7255,23 +7255,6 @@ public class FileStructureCheck {
 			found1 = false;
 			found2 = false;
 
-			System.out.println("norm vector 0: " + normalizedVector[0]);
-			System.out.println("norm vector 1: " + normalizedVector[1]);
-			System.out.println("norm vector 2: " + normalizedVector[2]);
-			System.out.println("");
-			System.out.println("norm v1 0: " + normV1[0]);
-			System.out.println("norm v1 1: " + normV1[1]);
-			System.out.println("norm v1 2: " + normV1[2]);
-			System.out.println("");
-			System.out.println("norm v2 0: " + normV2[0]);
-			System.out.println("norm v2 1: " + normV2[1]);
-			System.out.println("norm v2 2: " + normV2[2]);
-			System.out.println("");
-			System.out.println("norm v3 0: " + normV3[0]);
-			System.out.println("norm v3 1: " + normV3[1]);
-			System.out.println("norm v3 2: " + normV3[2]);
-			System.out.println("");
-			
 			//Calculate scalar products if no values are missing
 			if(!missingValues) {
 				scalarProducts[0] = ((normalizedVector[0] * normV1[0]) + (normalizedVector[1] * normV1[1])

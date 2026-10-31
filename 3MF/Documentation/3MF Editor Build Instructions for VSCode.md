@@ -20,13 +20,17 @@ Version 1.00
 
 - Download the 3mf\_Editor from Github.
 
-- From the VSCode File menu, select Open Workspace from File, and select the 3MF.code-wprkspace.
+- From the VSCode File menu, select Open Workspace from File, and select `3MF.code-workspace`.
 
 - The 3MF workspace should now be accessible from the project Explorer.
 
 ### Execution:
 
-- From the Run menu select Run Without Debugging and select “Java” as debugger. It will execute the “3MF Edit and Test” tool.
+- In the Run and Debug view, select **3MF Editor**. The saved `.vscode/launch.json` targets `com.qualitylogic.x3mf.StartUp` in project `3MF`, with the project folder as its working directory.
+
+- Press **Ctrl+F5** (Run Without Debugging) to build and launch the editor normally, or **F5** to build and launch with the Java debugger. The workspace enables building before launch.
+
+- This configuration works regardless of the active file. If VS Code offers to install a debugger for an Ignore file, dismiss the prompt, open `3MF.code-workspace`, and select **3MF Editor** in Run and Debug before trying again.
 
 ![A screenshot of a computer AI-generated content may be incorrect.](3MF_Editor_Build_Instructions_for_VSCode_assets/image1.png)
 
