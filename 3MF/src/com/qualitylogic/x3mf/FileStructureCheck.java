@@ -139,7 +139,7 @@ public class FileStructureCheck {
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
 			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "ER_176");
 
@@ -231,6 +231,9 @@ public class FileStructureCheck {
 		geometryLimitReported = false;
 		geometry = new GeometryCheck(this::geometryIssue);
 		referenceWhitespaceParts.clear();
+		aRelFiles.clear();
+		laRelNodes.clear();
+		relationshipRels.clear();
 		// 1) does the zip contain a [Content_Types].xml
 		try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 			boolean bContent = false;
@@ -241,6 +244,8 @@ public class FileStructureCheck {
 			Enumeration<? extends ZipEntry> inventory = zfile.entries();
 			while (inventory.hasMoreElements()) {
 				String name = inventory.nextElement().getName();
+				String invalidName = PackageChecks.invalidName(name);
+				if (invalidName != null) structureIssue("ER_183", "part name", invalidName);
 				entryNames.add("/" + name);
 				bentryNames.add(name.endsWith(".rels") || name.endsWith("/"));
 			}
@@ -276,7 +281,7 @@ public class FileStructureCheck {
 						continue;// Directory
 					sContent = IOUtils.toString(zin, "UTF-8");
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-						DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactory = SafeXml.factory();
 						DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 						Document doc = dBuilder
 								.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -508,7 +513,7 @@ public class FileStructureCheck {
 					// then the it must have validated (of course we setup an
 					// override for this)
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -685,7 +690,7 @@ public class FileStructureCheck {
 					// ran the validation earlier, so if it starts with <?xml,
 					// then the it must have validated
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -870,7 +875,7 @@ public class FileStructureCheck {
 					// ran the validation earlier, so if it starts with <?xml,
 					// then the it must have validated
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -952,7 +957,7 @@ public class FileStructureCheck {
 						continue;// Directory
 					sContent = IOUtils.toString(zin, "UTF-8");
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-						DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactory = SafeXml.factory();
 						dbFactory.setNamespaceAware(true);// needed to use
 															// getElementsByTagNameNS
 						DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -982,6 +987,20 @@ public class FileStructureCheck {
 								bchkReqExtP = true;
 							}
 						}
+					}
+				}
+			}
+			// Content-type overrides may identify JPEG parts with another extension.
+			Enumeration<? extends ZipEntry> images = zfile.entries();
+			while (images.hasMoreElements()) {
+				ZipEntry imagePart = images.nextElement();
+				String imageName = imagePart.getName();
+				if (imagePart.isDirectory() || imagePart.getSize() > 200000000) continue;
+				if ("image/jpeg".equals(declaredContentType("/" + imageName))
+						|| imageName.toLowerCase(java.util.Locale.ROOT).matches(".*\\.jpe?g")) {
+					try (InputStream image = zfile.getInputStream(imagePart)) {
+						if (PackageChecks.cmykJpeg(image))
+							structureIssue("ER_187", "image color space", "CMYK/YCCK JPEG images are not permitted: " + imageName);
 					}
 				}
 			}
@@ -1281,15 +1300,15 @@ public class FileStructureCheck {
 						for (String kn : relTypes) {
 							fWarningReturn += kn + "<br>";
 						}
-						fWarningReturn += "<Issue  issueID=\"WR_022\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fWarningReturn += "Type " + fType + " in " + aRelFiles.get(idc)
+						fxmlWarningReturn += "<Issue  issueID=\"WR_022\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
+						fxmlWarningReturn += "Type " + StringEscapeUtils.escapeXml11(fType) + " in " + StringEscapeUtils.escapeXml11(aRelFiles.get(idc))
 								+ " is not one of the known types." + "Does not appear to match the known types:";
 						String cm = "";
 						for (String kn : relTypes) {
-							fWarningReturn += cm + kn;
+							fxmlWarningReturn += cm + kn;
 							cm = ", ";
 						}
-						fWarningReturn += "</Issue>";
+						fxmlWarningReturn += "</Issue>";
 						errChk("WR_022");
 						iwrCnt++;
 						if (iwrCnt > iWrnMaxStr) {
@@ -1509,7 +1528,7 @@ public class FileStructureCheck {
 					zin.close();
 					if (ename.contentEquals(sRootModel))
 						bCheckPath = true;
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					dbFactory.setNamespaceAware(true);// needed to use
 														// getElementsByTagNameNS
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -1521,6 +1540,7 @@ public class FileStructureCheck {
 					if (!checkReferenceWhitespace(doc, ename.substring(1)))
 						return;
 
+					checkModelRules(doc, ename);
 					// gets a list of the uuids and stackids, expanded to
 					// include basematerials if present
 					stackId.clear();
@@ -2150,7 +2170,7 @@ public class FileStructureCheck {
 						}
 						ssIdListRef.add(fFile + "|" + slcId);
 						b2dSlices = true;
-						DocumentBuilderFactory dbFactoryx = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactoryx = SafeXml.factory();
 						dbFactoryx.setNamespaceAware(true);// needed to use
 															// getElementsByTagNameNS
 						DocumentBuilder dBuilderx = dbFactoryx.newDocumentBuilder();
@@ -3072,6 +3092,10 @@ public class FileStructureCheck {
 
 		} catch (ArrayIndexOutOfBoundsException | NullPointerException | IOException | SAXException
 				| ParserConfigurationException ex) {
+			if (ex instanceof SAXException && ex.getMessage() != null && ex.getMessage().contains("DOCTYPE")) {
+				structureIssue("ER_186", "XML DTD", "DTD content is not permitted in package XML.");
+				return;
+			}
 			fErrorReturn += "<br>ER_077: Caught an exception: " + ex.getMessage() + "<br>";
 			fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
 			fxmlErrorReturn += "Caught an exception: " + ex.getMessage();
@@ -3447,7 +3471,7 @@ public class FileStructureCheck {
 								ibaseComp++;
 								// System.out.println(ibaseComp);
 								if (multiCount >= 1) {
-									fErrorReturn += "Basematerials or Compositematerials is above first layer in multiproperties";
+									structureIssue("ER_188", "material ordering", "Base or composite material must be the first layer in multiproperties " + bid + " in " + file);
 								}
 							}
 							if (name.equals("colorgroup"))
@@ -5726,7 +5750,7 @@ public class FileStructureCheck {
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
 									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-										DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
 										DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -5932,7 +5956,7 @@ public class FileStructureCheck {
 							InputStream zin = zfile.getInputStream(entry);
 							sContent = IOUtils.toString(zin, "UTF-8");
 							if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-								DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+								DocumentBuilderFactory dbFactory = SafeXml.factory();
 								dbFactory.setNamespaceAware(true);// needed to use
 																	// getElementsByTagNameNS
 								DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -6092,7 +6116,7 @@ public class FileStructureCheck {
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
 									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-										DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
 										DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -7377,6 +7401,44 @@ public class FileStructureCheck {
 		errChk(code);
 	}
 
+	private void structureIssue(String code, String type, String message) {
+		if (ierCnt >= Math.max(1, iErrMaxStr)) return;
+		fxmlErrorReturn += "<Issue issueID=\"" + code + "\" severity=\"high\" class=\"structure\" type=\"" + type + "\">"
+				+ StringEscapeUtils.escapeXml11(message) + "</Issue>";
+		fErrorReturn += "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		ierCnt++;
+		errChk(code);
+	}
+
+	private void checkModelRules(Document doc, String file) {
+		NodeList nodes = doc.getElementsByTagName("*");
+		for (int i = 0; i < nodes.getLength(); i++) {
+			Element e = (Element)nodes.item(i);
+			if (e.hasAttributeNS("http://www.w3.org/XML/1998/namespace", "space"))
+				structureIssue("ER_184", "XML attribute", "xml:space is not permitted in model markup: " + file);
+			String ns = e.getNamespaceURI();
+			if ((GeometryCheck.CORE.equals(ns) && "base".equals(e.getLocalName()))
+					|| ("http://schemas.microsoft.com/3dmanufacturing/material/2015/02".equals(ns) && "color".equals(e.getLocalName()))) {
+				String value = e.getAttribute(e.hasAttribute("color") ? "color" : "displaycolor");
+				if (!value.matches("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?"))
+					structureIssue("ER_189", "color value", "Invalid hexadecimal color " + value + " in " + file);
+			}
+			if (!GeometryCheck.CORE.equals(ns) || !("component".equals(e.getLocalName()) || "item".equals(e.getLocalName()))) continue;
+			String path = e.getAttributeNS(GeometryCheck.PROD, "path").trim();
+			if (path.isEmpty()) continue;
+			String target = GeometryCheck.part(file, path);
+			String rels = file.substring(0, file.lastIndexOf('/') + 1) + "_rels/" + file.substring(file.lastIndexOf('/') + 1) + ".rels";
+			NodeList links = relationshipRels.get(rels.substring(1));
+			boolean found = false;
+			if (links != null) for (int j = 0; j < links.getLength(); j++) {
+				Element link = (Element)links.item(j);
+				if (relTypes.get(0).equals(link.getAttribute("Type")) && !"External".equals(link.getAttribute("TargetMode"))
+						&& target != null && target.equals(GeometryCheck.part(file, link.getAttribute("Target").trim()))) found = true;
+			}
+			if (!found) structureIssue("ER_185", "model relationship", "Model reference " + path + " in " + file + " requires a 3dmodel relationship in " + rels);
+		}
+	}
+
 	private String declaredContentType(String part) {
 		if (nType_override != null) for (int i = 0; i < nType_override.getLength(); i++) {
 			Element e = (Element)nType_override.item(i);
@@ -7517,7 +7579,7 @@ public class FileStructureCheck {
 			if (!xfile.trim().toLowerCase().startsWith("<?xml"))
 				return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);// needed to use
 												// getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();

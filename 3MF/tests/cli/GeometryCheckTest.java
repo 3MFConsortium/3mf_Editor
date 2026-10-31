@@ -67,7 +67,8 @@ public final class GeometryCheckTest {
         expect("closed positive", run(shape("",positive),item("1",IDENTITY),""));
         expect("inverted shell", run(shape("",negative),item("1",IDENTITY),""),"ER_180");
         expect("inward face", run(shape("",mesh(vertices(0,1),tetra(false,true,false,0))),item("1",IDENTITY),""),"ER_179");
-        expect("open surface", run(shape("",mesh(vertices(0,1),tetra(false,false,true,0))),item("1",IDENTITY),""),"ER_178");
+        expect("three triangle solid", run(shape("",mesh(vertices(0,1),tetra(false,false,true,0))),item("1",IDENTITY),""),"ER_169","ER_178");
+        expect("beam-only mesh has no triangle minimum", run(shape("",mesh(vertices(0,1),"")),item("1",IDENTITY),""));
         for (String type : List.of("support","surface","other")) {
             expect("exempt type " + type,run(shape("type='"+type+"'",negative),"",""));
             expect("exempt open " + type,run(shape("type='"+type+"'",mesh(vertices(0,1),tetra(false,false,true,0))),"",""));

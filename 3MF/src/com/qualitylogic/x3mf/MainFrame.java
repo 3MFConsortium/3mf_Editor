@@ -138,7 +138,6 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.TransformerFactoryConfigurationError;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-import javax.xml.transform.stream.StreamSource;
 import javax.xml.validation.Schema;
 import javax.xml.validation.SchemaFactory;
 import javax.xml.validation.Validator;
@@ -2851,7 +2850,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						}
 					}
 				}
-				if(unzipped.startsWith("<?xml")){
+				if(unzipped.startsWith("<?xml") || (f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".model")
+						&& !unzipped.startsWith("%3McF"))){
 					boolean chk = xmlValidCon(unzipped,f.getName());
 					if(!chk) bChkError = true;
 				}
@@ -3157,7 +3157,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			}
 	
 			//check content types:
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc;
@@ -3219,7 +3219,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xsdErrorList.clear();
 			schemaValidator.setErrorHandler(new XSDValidationLoggingErrorHandler()); 
 			// validate xml instance against the grammar. 
-			schemaValidator.validate(new StreamSource(new StringReader(tmp))); 
+			schemaValidator.validate(SafeXml.source(tmp));
 			boolean bWarnUUID = false;
 			uWarn = "";
 			if(bNoUUIDchk.isSelected()){
@@ -3382,7 +3382,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xsdErrorList.clear();
 			schemaValidator.setErrorHandler(new XSDValidationLoggingErrorHandler()); 
 			// validate xml instance against the grammar. 
-			schemaValidator.validate(new StreamSource(new StringReader(tmp))); 
+			schemaValidator.validate(SafeXml.source(tmp));
 			boolean bWarnUUID = false;
 			if(bNoUUIDchk.isSelected()){
 				xsdErrorListRm.clear();
@@ -3491,8 +3491,10 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			}
 
 		} catch (SAXException e) {
-			saveForConsole += "<font color='red'><br>Error in XML validation for \"" 
-					+ name + "\": "  +e.getMessage() + "<br></font>";
+			saveForConsole += "<font color='red'><br>SC_000: "
+					+ org.apache.commons.lang3.StringEscapeUtils.escapeHtml4("Invalid XML in " + name + ": " + e.getMessage()) + "<br></font>";
+			fxmlSchemaReturn += "<Issue issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"XML parse error\">"
+					+ org.apache.commons.lang3.StringEscapeUtils.escapeXml11("Invalid XML in " + name + ": " + e.getMessage()) + "</Issue>";
 			return false;
 		} catch (IOException e) { 
 			saveForConsole += "<font color='red'><br>IO Error in XML validation for \"" 
@@ -3786,7 +3788,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	private String formatXmlString(String file){
 		try{
 			if(file == null || file.contentEquals("")) return "";
-			Document document = DocumentBuilderFactory.newInstance()
+			Document document = SafeXml.factory()
 					.newDocumentBuilder()
 					.parse(new InputSource(new ByteArrayInputStream(file.getBytes("utf-8"))));
 
@@ -4142,7 +4144,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4176,7 +4178,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4228,7 +4230,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4415,7 +4417,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4495,7 +4497,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));

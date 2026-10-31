@@ -80,6 +80,7 @@ final class GeometryCheck {
         double[] points;
         BitSet used;
         boolean nonManifold, inconsistentOrientation, inverted;
+        int triangleCount = -1;
         final List<Reference> components = new ArrayList<>();
     }
     void addModel(Document doc, String name, ZipFile zip, Function<String, String> contentType) throws IOException {
@@ -156,6 +157,7 @@ final class GeometryCheck {
         String ns = shape.displaced ? DISP : CORE;
         List<Element> vertices = children(child(mesh, ns, "vertices"));
         List<Element> triangles = children(child(mesh, ns, "triangles"));
+        shape.triangleCount = triangles.size();
         if ((long)elements + vertices.size() + triangles.size() > budget) {
             incomplete(shape.key, "base mesh budget exceeded for " + shape.key + "."); return;
         }
@@ -236,6 +238,8 @@ final class GeometryCheck {
     }
     private void topology(Shape shape, boolean sliced) {
         if (!shape.solid || sliced) return;
+        if (shape.triangleCount > 0 && shape.triangleCount < 4)
+            issue("ER_169", false, shape.key, "Solid mesh must contain at least four triangles in " + shape.key + ".");
         if (shape.nonManifold) issue("ER_178", false, shape.key, "Non-manifold indexed edges in " + shape.key + "; each edge must belong to exactly two triangles.");
         if (shape.inconsistentOrientation) issue("ER_179", false, shape.key, "Inconsistent adjacent triangle orientation in " + shape.key + ".");
         if (shape.inverted) issue("ER_180", false, shape.key, "Inverted closed base mesh (negative signed volume) in " + shape.key + ".");

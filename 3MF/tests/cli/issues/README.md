@@ -794,3 +794,117 @@ declarations when the W3C URL is reachable and avoids network-dependent schema
 loading. It changes neither the source schemas nor production validation.
 The script also runs from `tests/cli` with
 `powershell -NoProfile -ExecutionPolicy Bypass -File .\issues\Test-ResourceOrdering.ps1`.
+
+## Issue #9 fix: package names, markup, relationships, images and materials
+
+The confirmed gaps below are fixed in the structure checker and the shared XML
+parsers. Both XML and HTML reports now carry explicit errors for the affected
+packages.
+
+| Diagnostic | Resulting behavior |
+| --- | --- |
+| `ER_183` | Reject unescaped non-ASCII ZIP part names and part-name segments beginning with a period. Preserve OPC's special `_rels/.rels` name and percent-encoded UTF-8 names. This is targeted validation, not a complete OPC URI validator. |
+| `ER_184` | Reject `xml:space` in model markup, including nested elements, using its namespace URI. |
+| `ER_185` | Require a `3dmodel` relationship for a Production component/build-item path. Resolve model and relationship paths relative to the referencing part and require an internal relationship. Custom relationship types remain accepted with a warning. |
+| `ER_186` | Reject DTDs before structural DOM parsing. GUI parsing and schema validation use the same DTD prohibition; schema-only rejection is reported as `SC_000`, including model XML without an XML declaration. Internal and external DTDs are both prohibited. |
+| `ER_187` | Reject four-component CMYK/YCCK JPEGs by reading the primary JPEG frame header. Skip complete APP/EXIF segments so an embedded RGB preview cannot mask a CMYK main image. Check JPEG extensions and effective `image/jpeg` content types, including overrides. No bitmap is decoded. |
+| `ER_169` | Diagnose ordinary solid base meshes with one to three triangles, alongside the existing manifold check. Preserve `support`, `surface`, `other`, authoritative slice contexts, and meshes without triangles used by beam lattices. |
+| `ER_188` | Report base/composite material above the first multiproperty layer as a structured error, with an error count and primary-diagnostic selection. |
+| `ER_189` | Reject invalid hexadecimal material colors in structure-only mode as well as the existing schema rejection. Accept six/eight hexadecimal digits and either letter case. |
+| `WR_022` | Store unknown non-root relationship warnings in the XML warning stream, correcting the previous HTML-only diagnostic. Hiding warning details does not remove the warning from XML or change its status to Pass. |
+
+Relationship collections are cleared for each validation run. New diagnostics
+escape user-supplied text and respect the existing structure error limit. The
+DTD parser settings are applied before parsing, rather than checking a DOM
+after entities could have been processed. Existing schema imports are unchanged.
+
+Validation on Windows/Zulu OpenJDK 21.0.3: all **30 available CLI cases** in
+`Test-LowSeverity.ps1`, **20 package/XML helper checks**, **44 geometry checks**,
+**18 headless Secure Content regressions**, and **35 reference-whitespace
+regressions** pass. Production and package helper sources compile against Java
+8 APIs with `--release 8`; the independent geometry helper uses Java 17 APIs.
+The missing historical `N_XPM_0208_03` remains explicitly unavailable and is
+excluded from the tested count. No full conformance suite or interactive GUI
+run was performed. The checks cover every available issue fixture, repaired
+controls, official percent-encoded Unicode controls, custom relationships with
+warnings shown/hidden, CMYK content-type overrides, and separate schema/structure
+modes. Repaired material controls also reorder the corresponding property
+indices, preserving their meaning when swapping layers.
+
+JPEG checking establishes the prohibited four-component representation, not
+complete JPEG validity, RGB color management, or PNG decoding. The existing
+200,000,000-byte structure limit still applies; oversized parts retain their
+incomplete-validation warning. Encrypted image bytes are not decrypted by this
+header check. The unavailable fixture cannot be claimed as tested.
+
+### Original investigation before the fix
+
+[Issue #9](https://github.com/3MFConsortium/3mf_Editor/issues/9), checked live on
+2026-10-31, is open with no comments. This investigation changes no production
+code. Fresh production sources at `0bafd4dd1b39c584ab045cd9e604789561228e93`
+were compiled with `--release 8` and run on Windows/Zulu OpenJDK 21.0.3 with
+a 2 GiB heap, schema and structural checks, and UUID checking enabled.
+Official fixtures are from `a63f4bf07c4ab287c8f84f1cdeab8ee92333a577`.
+
+| Reported area / fixture | Current CLI XML result | Finding |
+| --- | --- | --- |
+| Unicode part names: `N_XPM_0208_01` | Pass | Raw Unicode character U+052A occurs in model and relationship part names. No package-name syntax check diagnoses it. This establishes the historical negative-fixture mismatch, not a rule banning all Unicode names. |
+| Unicode part names: `N_XPM_0208_03` | Unavailable | Not present in this checkout; not counted as tested. |
+| Unicode/content types: `N_XPX_0205_02` | Fail, `ER_108` | Rejected for duplicate Content Types Override PartName `/3D/3dmodel.model`, not for Unicode. This is not evidence of a general name-syntax fix. |
+| Non-root relationship type: `N_XPM_0405_03` | Pass | `wrong3dmodel` is detected as `WR_022` in HTML, but omitted from XML and does not reject the model. |
+| Unsupported `xml:space`: `N_XPM_0409_01` | Pass | The model has `xml:space="preserve"`; no explicit check rejects it. |
+| Invalid path: `N_XPM_0415_01` | Pass | Existing part `/3D/nonroot/.3dmodel1.model` and matching references bypass existence-only checks. |
+| Non-RGB image: `N_XPM_0419_01` | Pass | The package thumbnail is `Thumbnails/CMYKjpeg.jpg`; its JPEG SOF has four components. No thumbnail color-space check rejects it. |
+| DTD: `N_XPM_0420_01` | Pass | Internal `DOCTYPE note` is accepted. Structure DOM factories do not disallow DOCTYPE; no explicit DTD rejection is present. This test does not exercise external entities or entity-expansion attacks. |
+| Fewer than four triangles: `N_XPM_0426_01` | Fail, `ER_178` | The three-triangle mesh is now rejected by non-manifold geometry validation. The separate `ER_169` minimum-triangle check is inside displacement handling, so this does not establish a general minimum-count diagnostic. |
+| Material above first layer: `N_XPM_0604_03` | Pass | `multiproperties pids="6 1"` references a color group before base materials. HTML reports structural failure, while XML incorrectly reports Pass. |
+| Invalid color: `N_XPM_0608_01` | Fail, `SC_000` | `#FFHFFF` is rejected by the consolidated schema's color pattern. The reported missing rejection is not reproduced with schema validation enabled. |
+| Positive controls: `P_XPM_0101_01`, `P_XPX_0101_01` | Both Pass | Relevant baseline packages remain accepted. |
+
+Of 11 named negative fixtures, ten are available: seven produce Pass and three
+produce Fail. Both positive controls pass. All 12 available packages complete
+without process errors or timeouts. Five acceptance expectations match and
+seven do not; the missing fixture is recorded separately.
+
+### Causes and specification checks
+
+In `FileStructureCheck.java`, the non-root relationship branch around lines
+1277-1297 appends the `WR_022` XML markup to **fWarningReturn**, rather than
+**fxmlWarningReturn**. It also treats an unknown type only as a warning. A fix
+should verify the required relationship for a referenced model, without
+blanket-rejecting custom relationship types permitted by extension rules.
+
+The multiproperty branch around line 3450 appends plain text to
+**fErrorReturn**, but creates no XML issue, increments no error counter, and
+does not call `errChk`. `MainFrame` chooses the CLI status from the XML issue
+strings (around lines 983 and 1128), explaining the HTML/XML disagreement.
+Repairing these diagnostics should be a priority alongside the missing checks.
+
+The live [Core specification](https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md)
+requires appropriate payload relationships (2.1.1), forbids leading-period part
+names (2.2), prohibits DTD content and recommends treating it as an error
+(2.3), forbids `xml:space` (2.3.2), and prohibits CMYK JPEGs (6.1).
+Its Unicode-name guidance refers to OPC Part URI Syntax and uses SHOULD;
+confirm the exact ZIP/URI encoding defect against OPC before implementing a
+Unicode rejection policy. The
+[Materials specification, 2.5](https://github.com/3MFConsortium/spec_materials/blob/master/3MF%20Materials%20Extension.md)
+requires a material to be first in the multiproperty list. A follow-up fix should
+cover correct encoded names, custom relationships, RGB images, ordinary XML
+without DTDs, and correctly ordered multiproperties as positive controls.
+
+Reproduce from the project directory (JDK 17+ and official fixture checkout):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-LowSeverity.ps1
+```
+
+The script accepts `-TestSuiteRoot PATH`, compiles fresh sources, isolates each
+CLI process, and saves CSV/JSON summaries and XML/HTML/process logs under ignored
+`tests/cli/results/low-severity-*`. The maintained regression exits 1 for failed
+expectations, process errors, or unexpected missing fixtures; the known missing
+historical `_0208_03` is recorded as unavailable without failing the run.
+The original investigation evidence is in
+`tests/cli/results/low-severity-20261031-125515`.
+The new helper sources and script are not Git-ignored. No ignore rules were
+changed. `git diff --check`
+passes. No full conformance suite or interactive GUI run was performed.
