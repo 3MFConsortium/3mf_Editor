@@ -116,6 +116,9 @@ Note that the 3MF Editor’s primary purpose was to aid in the development of te
 
     - **Decrease Font**
 
+    - **Dark Mode** – Switches the four main panes between light and dark colors.
+      The preference is saved between sessions. Images retain their original colors.
+
 - **Tools**
 
     - **View 3MF** – Launches the system 3MF Viewer, typically 3D Builder

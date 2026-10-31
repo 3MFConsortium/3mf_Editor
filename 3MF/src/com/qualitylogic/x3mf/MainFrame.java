@@ -77,6 +77,7 @@ import javax.swing.Icon;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JEditorPane;
@@ -197,6 +198,9 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	private dirPop dPop = new dirPop();
 	private editPop ePop = new editPop();
 	private IniData inDat = new IniData();
+	private final EditorTheme editorTheme = new EditorTheme();
+	private boolean darkMode;
+	private JCheckBoxMenuItem darkModeItem;
 	private PropertyData propDat = new PropertyData();
 	private FileStructureCheck nfsc = new FileStructureCheck();
 	private boolean xmlChanged = false;
@@ -266,7 +270,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	JLabel xmlStat = new JLabel("");
 	public DefaultCaret xmlcaret = (DefaultCaret)xmlEd.getCaret();
 	public JTextArea txtStat = new JTextArea();
-	public static JEditorPane txtConsole = new JEditorPane();
+	public static JEditorPane txtConsole = new EditorTheme.ConsolePane();
 
 	public JScrollPane img_refPane = new JScrollPane(img_ref,
 			JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
@@ -583,6 +587,9 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		menuBar.add(mntmView);
 		mntmView.add(upFontI);
 		mntmView.add(downFontI);
+		darkModeItem = new JCheckBoxMenuItem("Dark Mode");
+		mntmView.add(darkModeItem);
+		darkModeItem.addActionListener(e -> setDarkMode(darkModeItem.isSelected()));
 
 		JMenu mntmTools = new JMenu("Tools");
 		mntmTools.setHorizontalAlignment(SwingConstants.LEFT);
@@ -1273,6 +1280,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			mainFile = "";
 			DefaultMutableTreeNode top = new DefaultMutableTreeNode("Empty");
 			tree = new JTree(top);
+			if (!StartUp.brunCli) editorTheme.apply(tree, darkMode);
 			return tree;
 		}
 		mainFile = selectedFile.getName();
@@ -1282,6 +1290,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		tree.getSelectionModel().setSelectionMode
 		(TreeSelectionModel.SINGLE_TREE_SELECTION);
 		createNodes(top);
+		if (!StartUp.brunCli) editorTheme.apply(tree, darkMode);
 		tree.setShowsRootHandles(true);
 		for (int i = 0; i < tree.getRowCount(); i++) {
 			tree.expandRow(i);
@@ -2931,6 +2940,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		getPropDat();
 		//The ini has values like the screen sizing
 		inDat.readIni();
+		if (!StartUp.brunCli) setDarkMode(inDat.darkMode);
 		scrSzHgt = inDat.pscrSzHgt;
 		scrSzWid = inDat.pscrSzWid;
 		sclWid = inDat.psclWid;
@@ -3072,6 +3082,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			inDat.pNoUUIDchk = false;
 		inDat.bdoScroll = bdoScroll;
 		inDat.bdoWarn = bdoWarn;
+		if (!StartUp.brunCli) inDat.darkMode = darkMode;
 		if(lastFile == null) lastFile = "";
 		inDat.lastFile = lastFile;
 		inDat.thumbDir = thumbDir;
@@ -3496,6 +3507,18 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		else
 			return false;
 	}
+	// Apply colors without replacing the XML document or its undo history.
+	void setDarkMode(boolean enabled) {
+		if (StartUp.brunCli) return;
+		darkMode = enabled;
+		if (darkModeItem != null) darkModeItem.setSelected(enabled);
+		editorTheme.apply(this, enabled);
+		((EditorTheme.ConsolePane) txtConsole).setDark(enabled);
+		// Keep the existing change indicator visible on either surface.
+		btnCH.setBackground(Color.GREEN);
+		btnCH.setForeground(Color.BLACK);
+	}
+
 	//text will be added to the console. The expected input is html.
 	private static void addToConsole(String txt){
 		txtConsole.setContentType("text/html");

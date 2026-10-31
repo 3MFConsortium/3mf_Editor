@@ -33,6 +33,7 @@ import javax.swing.text.PlainDocument;
 import javax.swing.text.PlainView;
 import javax.swing.text.Segment;
 import javax.swing.text.Utilities;
+import javax.swing.JComponent;
 
 /**
  * Thanks: http://groups.google.com/group/de.comp.lang.java/msg/2bbeb016abad270
@@ -48,6 +49,7 @@ import javax.swing.text.Utilities;
 public class XmlView extends PlainView {
 	
     private static HashMap<Pattern, Color> patternColors;
+    private static final Map<Color, Color> darkColors = new HashMap<Color, Color>();
     private static String GENERIC_XML_NAME = "[A-Za-z]+[A-Za-z0-9\\-_]*(:[A-Za-z]+[A-Za-z0-9\\-_]+)?";
     private static String TAG_PATTERN = "(</?" + GENERIC_XML_NAME + ")";
     private static String TAG_END_PATTERN = "(>|/>)";
@@ -69,6 +71,12 @@ public class XmlView extends PlainView {
         patternColors.put(Pattern.compile(TAG_ATTRIBUTE_VALUE), new Color(42,
                 0, 255));
         patternColors.put(Pattern.compile(TAG_COMMENT), Color.BLUE);
+        darkColors.put(new Color(0, 200, 0), new Color(140, 221, 160));
+        darkColors.put(Color.GRAY, new Color(180, 187, 196));
+        darkColors.put(new Color(150, 0, 100), new Color(233, 164, 221));
+        darkColors.put(new Color(63, 127, 127), new Color(130, 210, 215));
+        darkColors.put(new Color(42, 0, 255), new Color(164, 190, 255));
+        darkColors.put(Color.BLUE, new Color(145, 202, 255));
         
     }
 
@@ -86,6 +94,9 @@ public class XmlView extends PlainView {
             int p1) throws BadLocationException {
 
         Document doc = getDocument();
+        boolean dark = getContainer() instanceof JComponent && Boolean.TRUE.equals(
+            ((JComponent) getContainer()).getClientProperty("3mf.darkMode"));
+        Color plain = dark ? getContainer().getForeground() : Color.black;
         String text = doc.getText(p0, p1 - p0);
 
         Segment segment = getLineBuffer();
@@ -100,7 +111,7 @@ public class XmlView extends PlainView {
 
             while (matcher.find()) {
                 startMap.put(matcher.start(1), matcher.end());
-                colorMap.put(matcher.start(1), entry.getValue());
+                colorMap.put(matcher.start(1), dark ? darkColors.get(entry.getValue()) : entry.getValue());
             }
         }
         
@@ -127,7 +138,7 @@ public class XmlView extends PlainView {
             int end = entry.getValue();
 
             if (i < start) {
-                graphics.setColor(Color.black);
+                graphics.setColor(plain);
                 doc.getText(p0 + i, start - i, segment);
                 x = Utilities.drawTabbedText(segment, x, y, graphics, this, i);
             }
@@ -140,7 +151,7 @@ public class XmlView extends PlainView {
 
         // Paint possible remaining text black
         if (i < text.length()) {
-            graphics.setColor(Color.black);
+            graphics.setColor(plain);
             doc.getText(p0 + i, text.length() - i, segment);
             x = Utilities.drawTabbedText(segment, x, y, graphics, this, i);
         }

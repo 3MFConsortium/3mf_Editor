@@ -27,6 +27,7 @@ public class IniData {
 	public boolean pNoUUIDchk = true;
 	public boolean bdoScroll = true;
 	public boolean bdoWarn = true;
+	public boolean darkMode = false;
 	public String lastFile = "";
 	public String thumbDir = "";
 	public String transSize = "30150.0, 219850.0, 33700.9, 366300.0, 5000.0, 252800.0";
@@ -199,6 +200,12 @@ public class IniData {
 						logger.info("Failed to load bdoWarn with " + tmpString + "\nDue to: " + e.getMessage());
 					}
 				}
+				ib=overRide.indexOf("darkMode");
+				if (ib != -1) {
+					ib=overRide.indexOf("\"", ib);
+					ie=overRide.indexOf("\"", ib+1);
+					darkMode = Boolean.parseBoolean(overRide.substring(ib+1, ie).trim());
+				}
 				ib=overRide.indexOf("lastFile");
 				if (ib != -1){
 					ib=overRide.indexOf("\"",ib);
@@ -293,6 +300,7 @@ public class IniData {
 			if (pNoUUIDchk) sTrue="true";
 			overRide = "pNoUUIDchk = \"" + sTrue + "\"" + el;
 			fw.write(overRide);
+			fw.write("darkMode = \"" + darkMode + "\"" + el);
 			fw.close();
 		} catch (Exception e) {
 			e.printStackTrace();

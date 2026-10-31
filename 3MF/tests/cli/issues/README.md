@@ -49,6 +49,48 @@ again when resources are packaged. Its Git blob ID matches the original:
 `2c3a36ccb79816490cece58041592bfcbe0974e8`. This is distinct from the website
 link reported in #19; the Help action contains no personal URL.
 
+## Issue #13: saved dark mode for the four main panes
+
+[Issue #13](https://github.com/3MFConsortium/3mf_Editor/issues/13) is implemented
+with **View > Dark Mode**. The toggle updates the package tree, XML editor,
+statistics and HTML console immediately, along with surrounding controls and
+image-panel backgrounds. XML syntax, caret, selection, tree selection, links and
+diagnostic severity colors use a readable dark palette. Thumbnail/alpha image
+pixels are unchanged. Disabling the option restores the original light colors.
+Menus and separate dialogs retain the platform look and feel.
+
+The preference is stored as `darkMode = "true"` or `"false"` in `3MF.ini`
+through the existing settings-save lifecycle. Missing settings default to light.
+Switching themes preserves the XML document, edit state and undo history. New
+package trees and subsequent console updates use the active theme. Console HTML
+documents are reset when updated so stylesheet rules cannot leak into light mode.
+CLI mode ignores the GUI preference and retains the original report colors.
+
+Run from the `3MF` directory (JDK 17+):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-DarkMode.ps1
+```
+
+This compiles current sources and tests real editor components in headless mode:
+XML painting, pane colors, replacement tree renderer/selection colors, console
+severity colors and updates, exact light HTML restoration, document/undo
+preservation, preference round trips and CLI theme isolation. It saves a rendered
+`dark-xml.png` and logs under ignored `tests/cli/results/dark-mode-*`.
+Use `-EditorSmoke` to additionally construct the native editor and exercise its
+actual View menu toggle (requires desktop AWT; no window is shown).
+Use `-TestSuiteRoot PATH` to run official positive and negative beam fixtures
+with both saved preference values and check that GUI colors do not enter CLI HTML.
+The optional fixture checkout is normally `../../test_suites` from this directory.
+
+Validation on Windows/JDK 21: the headless component checks, native menu smoke
+check, all four saved-preference CLI fixture checks and all 18 existing
+`Test-SecureContent.ps1 -Headless` checks pass. The rendered dark XML was visually
+inspected and `git diff --check` passes. Interactive four-pane visual testing
+with a loaded package remains a manual check; no full conformance run was made.
+The new regression script and Java sources are not Git-ignored; generated reports
+remain ignored. No ignore rules were changed.
+
 ## Run
 
 Requires Windows PowerShell 5.1, Java and `javac` (JDK 17 or newer), and a local checkout of [3MFConsortium/test_suites](https://github.com/3MFConsortium/test_suites). CLI mode selects headless AWT before initializing Swing and does not require a desktop session or X11 DISPLAY.
