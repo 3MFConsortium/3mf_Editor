@@ -26,6 +26,7 @@ import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.w3c.dom.Document;
@@ -36,6 +37,8 @@ import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 
 public class FileStructureCheck {
+	private static final String VOLUMETRIC_NS = "http://schemas.3mf.io/3dmanufacturing/volumetric/2022/01";
+	private static final String IMPLICIT_NS = "http://schemas.3mf.io/3dmanufacturing/implicit/2023/12";
 	static Log logger = LogFactory.getLog(Class.class);
 	public String fCurrentFile = "";
 	public String fSchemaLoc = "";
@@ -46,6 +49,10 @@ public class FileStructureCheck {
 	public List<KeyInfo> keyinfo = null;
 	public int iErrMaxStr = 9;
 	public int iWrnMaxStr = 9;
+	private final Set<String> referenceWhitespaceParts = new HashSet<String>();
+	private GeometryCheck geometry;
+	private boolean geometryLimitReported;
+	public boolean validationIncomplete;
 	public boolean bnonSecure = true;
 	private String sContent;
 	private NodeList nType_default;
@@ -127,14 +134,14 @@ public class FileStructureCheck {
 			"ER_033", "ER_034", "ER_035", "ER_036", "ER_050", "ER_057", "ER_061", "ER_063", "ER_064", "ER_065",
 			"ER_066", "ER_082", "ER_083", "ER_084", "ER_087", "ER_094", "ER_095", "ER_096", "ER_109", "ER_110",
 			"ER_111", "ER_080", "ER_086", "ER_089", "ER_090", "ER_091", "ER_092", "ER_093", "ER_098", "ER_112",
-			"ER_113", "ER_099", "ER_100", "ER_020", "ER_007", "ER_008", "ER_013", "ER_014", "ER_056", "ER_060",
+			"ER_113", "ER_099", "ER_100", "ER_020", "ER_007", "ER_008", "ER_013", "ER_056", "ER_060",
 			"ER_062", "ER_078", "ER_079", "ER_081", "ER_085", "ER_088", "ER_097", "ER_004", "ER_010", "ER_015",
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "ER_176");
 
 	public FileStructureCheck() {
 	}
@@ -220,23 +227,43 @@ public class FileStructureCheck {
 		String sRootModel = "";
 		ierCnt = 0;
 		iwrCnt = 0;
+		validationIncomplete = false;
+		geometryLimitReported = false;
+		geometry = new GeometryCheck(this::geometryIssue);
+		referenceWhitespaceParts.clear();
+		aRelFiles.clear();
+		laRelNodes.clear();
+		relationshipRels.clear();
 		// 1) does the zip contain a [Content_Types].xml
 		try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 			boolean bContent = false;
 			boolean bRels = false;
+			// Build a complete inventory independently of content skips and diagnostic limits.
+			entryNames.clear();
+			bentryNames.clear();
+			Enumeration<? extends ZipEntry> inventory = zfile.entries();
+			while (inventory.hasMoreElements()) {
+				String name = inventory.nextElement().getName();
+				String invalidName = PackageChecks.invalidName(name);
+				if (invalidName != null) structureIssue("ER_183", "part name", invalidName);
+				entryNames.add("/" + name);
+				bentryNames.add(name.endsWith(".rels") || name.endsWith("/"));
+			}
 			Enumeration<? extends ZipEntry> entries = zfile.entries();
 			while (entries.hasMoreElements()) {
 				System.gc();
 				ZipEntry entry = entries.nextElement();
+				String name = entry.getName();
 				if (entry.getSize() > 200000000) {
 					if (!StartUp.brunCli) {
 						JOptionPane.showMessageDialog(null,
 								"Part is too large for structural check: " + entry.getName(),
 								"Part too large for structural check.", JOptionPane.WARNING_MESSAGE);
 					}
-					fWarningReturn += "<br>WR_008: " + entry.getName() + " was skipped as too large.<br>";
+					validationIncomplete = true;
+					fWarningReturn += "<br>WR_008: Validation incomplete: " + StringEscapeUtils.escapeHtml4(entry.getName()) + " was skipped as too large for structural content checks (limit 200000000 bytes).<br>";
 					fxmlWarningReturn += "<Issue  issueID=\"WR_008\" severity=\"info\" class=\"structure\" type=\"memory limit\">";
-					fxmlWarningReturn += entry.getName() + " was skipped as too large.";
+					fxmlWarningReturn += "Validation incomplete: " + StringEscapeUtils.escapeXml11(entry.getName()) + " was skipped as too large for structural content checks (limit 200000000 bytes).";
 					fxmlWarningReturn += "</Issue>";
 					errChk("WR_008");
 					iwrCnt++;
@@ -247,13 +274,6 @@ public class FileStructureCheck {
 					continue;
 				}
 
-				String name = entry.getName();
-				entryNames.add("/" + name);
-				if (name.endsWith(".rels") || name.endsWith("/"))
-					bentryNames.add(true);
-				else
-					bentryNames.add(false);
-
 				{
 					// do the keystore check
 					InputStream zin = zfile.getInputStream(entry);
@@ -261,12 +281,16 @@ public class FileStructureCheck {
 						continue;// Directory
 					sContent = IOUtils.toString(zin, "UTF-8");
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-						DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactory = SafeXml.factory();
 						DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 						Document doc = dBuilder
 								.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
 						doc.getDocumentElement().normalize();
 						Element root = doc.getDocumentElement();
+						if (!checkReferenceWhitespace(doc, name)) {
+							zin.close();
+							return;
+						}
 						if (root != null) {
 							String rootname = root.getNodeName();
 							if (rootname.toLowerCase().equals("keystore")) {
@@ -489,7 +513,7 @@ public class FileStructureCheck {
 					// then the it must have validated (of course we setup an
 					// override for this)
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -666,7 +690,7 @@ public class FileStructureCheck {
 					// ran the validation earlier, so if it starts with <?xml,
 					// then the it must have validated
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -809,6 +833,21 @@ public class FileStructureCheck {
 								return;
 							}
 						} else {
+							// OPC permits only one Override for each part, regardless of content type.
+							if (sOverRide.contains(pn.toLowerCase())) {
+								fErrorReturn += "<br>ER_108: The Override PartName " + pn
+										+ " has already been defined in [Content_Types].xml.<br>";
+								fxmlErrorReturn += "<Issue  issueID=\"ER_108\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
+								fxmlErrorReturn += "The Override PartName " + pn
+										+ " has already been defined in [Content_Types].xml.";
+								fxmlErrorReturn += "</Issue>";
+								errChk("ER_108");
+								ierCnt++;
+								if (ierCnt > iErrMaxStr) {
+									fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+									return;
+								}
+							}
 							sOverRide.add(pn.toLowerCase());
 						}
 					}
@@ -836,7 +875,7 @@ public class FileStructureCheck {
 					// ran the validation earlier, so if it starts with <?xml,
 					// then the it must have validated
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -918,7 +957,7 @@ public class FileStructureCheck {
 						continue;// Directory
 					sContent = IOUtils.toString(zin, "UTF-8");
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-						DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactory = SafeXml.factory();
 						dbFactory.setNamespaceAware(true);// needed to use
 															// getElementsByTagNameNS
 						DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -948,6 +987,20 @@ public class FileStructureCheck {
 								bchkReqExtP = true;
 							}
 						}
+					}
+				}
+			}
+			// Content-type overrides may identify JPEG parts with another extension.
+			Enumeration<? extends ZipEntry> images = zfile.entries();
+			while (images.hasMoreElements()) {
+				ZipEntry imagePart = images.nextElement();
+				String imageName = imagePart.getName();
+				if (imagePart.isDirectory() || imagePart.getSize() > 200000000) continue;
+				if ("image/jpeg".equals(declaredContentType("/" + imageName))
+						|| imageName.toLowerCase(java.util.Locale.ROOT).matches(".*\\.jpe?g")) {
+					try (InputStream image = zfile.getInputStream(imagePart)) {
+						if (PackageChecks.cmykJpeg(image))
+							structureIssue("ER_187", "image color space", "CMYK/YCCK JPEG images are not permitted: " + imageName);
 					}
 				}
 			}
@@ -1070,18 +1123,17 @@ public class FileStructureCheck {
 				// System.out.println(overRideFileCheck(name));
 				if (!bLocate && overRideFileCheck("/" + name)) {
 					bLocate = true;
-					break;
 				}
 				if (!bLocate) {
-					fErrorReturn += "<br>ER_014: Could not find an extension for " + name
+					fWarningReturn += "<br>WR_024: Could not find an extension for " + name
 							+ " in [Content_Types].xml<br>";
-					fxmlErrorReturn += "<Issue  issueID=\"ER_014\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-					fxmlErrorReturn += "Could not find an extension for " + name + " in [Content_Types].xml";
-					fxmlErrorReturn += "</Issue>";
-					errChk("ER_014");
-					ierCnt++;
-					if (ierCnt > iErrMaxStr) {
-						fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+					fxmlWarningReturn += "<Issue  issueID=\"WR_024\" severity=\"info\" class=\"structure\" type=\"content type warning\">";
+					fxmlWarningReturn += "Could not find an extension for " + name + " in [Content_Types].xml";
+					fxmlWarningReturn += "</Issue>";
+					errChk("WR_024");
+					iwrCnt++;
+					if (iwrCnt > iWrnMaxStr) {
+						fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
 						return;
 					}
 				}
@@ -1248,15 +1300,15 @@ public class FileStructureCheck {
 						for (String kn : relTypes) {
 							fWarningReturn += kn + "<br>";
 						}
-						fWarningReturn += "<Issue  issueID=\"WR_022\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fWarningReturn += "Type " + fType + " in " + aRelFiles.get(idc)
+						fxmlWarningReturn += "<Issue  issueID=\"WR_022\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
+						fxmlWarningReturn += "Type " + StringEscapeUtils.escapeXml11(fType) + " in " + StringEscapeUtils.escapeXml11(aRelFiles.get(idc))
 								+ " is not one of the known types." + "Does not appear to match the known types:";
 						String cm = "";
 						for (String kn : relTypes) {
-							fWarningReturn += cm + kn;
+							fxmlWarningReturn += cm + kn;
 							cm = ", ";
 						}
-						fWarningReturn += "</Issue>";
+						fxmlWarningReturn += "</Issue>";
 						errChk("WR_022");
 						iwrCnt++;
 						if (iwrCnt > iWrnMaxStr) {
@@ -1476,7 +1528,7 @@ public class FileStructureCheck {
 					zin.close();
 					if (ename.contentEquals(sRootModel))
 						bCheckPath = true;
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					dbFactory.setNamespaceAware(true);// needed to use
 														// getElementsByTagNameNS
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -1484,6 +1536,11 @@ public class FileStructureCheck {
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
 					doc.getDocumentElement().normalize();
 
+					// Also inspect decrypted model parts, which were opaque in the ZIP pass.
+					if (!checkReferenceWhitespace(doc, ename.substring(1)))
+						return;
+
+					checkModelRules(doc, ename);
 					// gets a list of the uuids and stackids, expanded to
 					// include basematerials if present
 					stackId.clear();
@@ -1503,6 +1560,7 @@ public class FileStructureCheck {
 					idUsed.clear();
 
 					fillUuid(doc, ename);
+					geometry.addModel(doc, ename, zfile, this::declaredContentType);
 
 					// if they are empty, they will kick out with no duplicates
 					// check for duplicate basematerials ids.
@@ -2112,7 +2170,7 @@ public class FileStructureCheck {
 						}
 						ssIdListRef.add(fFile + "|" + slcId);
 						b2dSlices = true;
-						DocumentBuilderFactory dbFactoryx = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactoryx = SafeXml.factory();
 						dbFactoryx.setNamespaceAware(true);// needed to use
 															// getElementsByTagNameNS
 						DocumentBuilder dBuilderx = dbFactoryx.newDocumentBuilder();
@@ -2290,8 +2348,7 @@ public class FileStructureCheck {
 						Node defN = nl.item(ic);
 						String fFile = "";
 
-						// If this has a transform, validate that m02, m12, m20,
-						// and m21 are 0 and m22 is 1
+						// Collect planar-transform violations for the slice-only check below.
 						if (defN.getAttributes().getNamedItem("transform") != null) {
 							String stran = defN.getAttributes().getNamedItem("transform").getTextContent().trim()
 									.replaceAll(" +", " ");
@@ -2303,60 +2360,30 @@ public class FileStructureCheck {
 									transformErrorLoc
 											.add("ER_071: Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_071\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_071");
 								}
 								if (Float.parseFloat(tstNum[5]) != 0.f) {
 									transformErrorLoc
 											.add("ER_072: Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_072\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_072");
 								}
 								if (Float.parseFloat(tstNum[6]) != 0.f) {
 									transformErrorLoc
 											.add("ER_073: Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_073\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_073");
 								}
 								if (Float.parseFloat(tstNum[7]) != 0.f) {
 									transformErrorLoc
 											.add("ER_074: Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_074\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_074");
 								}
 								if (Float.parseFloat(tstNum[8]) != 1.f) {
 									transformErrorLoc
 											.add("ER_075: Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_075\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_075");
 								}
 							} catch (Exception et1) {
 								transformErrorLoc.add("ER_076: Could not parse number contained in " + stran
 										+ " transform in " + ename);
-								fxmlErrorReturn += "<Issue  issueID=\"ER_076\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-								fxmlErrorReturn += "Could not parse number contained in " + stran + " transform in "
-										+ ename;
-								fxmlErrorReturn += "</Issue>";
-								errChk("ER_076");
 							}
 
 						}
@@ -2582,8 +2609,7 @@ public class FileStructureCheck {
 					for (int ic = 0; ic < nl.getLength(); ic++) {
 						Node defN = nl.item(ic);
 
-						// If this has a transform, validate that m02, m12, m20,
-						// and m21 are 0 and m22 is 1
+						// Collect planar-transform violations for the slice-only check below.
 						if (defN.getAttributes().getNamedItem("transform") != null) {
 							String stran = defN.getAttributes().getNamedItem("transform").getTextContent().trim()
 									.replaceAll(" +", " ");
@@ -2595,60 +2621,30 @@ public class FileStructureCheck {
 									transformErrorLoc
 											.add("ER_071: Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_071\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_071");
 								}
 								if (Float.parseFloat(tstNum[5]) != 0.f) {
 									transformErrorLoc
 											.add("ER_072: Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_072\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_072");
 								}
 								if (Float.parseFloat(tstNum[6]) != 0.f) {
 									transformErrorLoc
 											.add("ER_073: Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_073\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_073");
 								}
 								if (Float.parseFloat(tstNum[7]) != 0.f) {
 									transformErrorLoc
 											.add("ER_074: Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_074\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_074");
 								}
 								if (Float.parseFloat(tstNum[8]) != 1.f) {
 									transformErrorLoc
 											.add("ER_075: Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_075\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_075");
 								}
 							} catch (Exception et1) {
 								transformErrorLoc.add("ER_076: Could not parse number contained in " + stran
 										+ " transform in " + ename);
-								fxmlErrorReturn += "<Issue  issueID=\"ER_076\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-								fxmlErrorReturn += "Could not parse number contained in " + stran + " transform in "
-										+ ename;
-								fxmlErrorReturn += "</Issue>";
-								errChk("ER_076");
 							}
 
 						}
@@ -2974,6 +2970,7 @@ public class FileStructureCheck {
 					}
 				} // end of models looping
 			}
+			geometry.finish(sRootModel);
 			for (int i = 0; i < bentryNames.size(); i++) {
 				if (!bentryNames.get(i)) {
 					String addCom = "";
@@ -3075,6 +3072,15 @@ public class FileStructureCheck {
 			// Check for 2d slices with bad transforms
 			if (b2dSlices && transformErrorLoc.size() > 0) {
 				for (String trs : transformErrorLoc) {
+					// Slice-only restrictions must affect XML and error status only
+					// when slice data is present, just like the HTML diagnostics.
+					String code = trs.substring(0, 6);
+					String message = trs.substring(8).replace("&", "&amp;")
+							.replace("<", "&lt;").replace(">", "&gt;");
+					fxmlErrorReturn += "<Issue issueID=\"" + code
+							+ "\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">"
+							+ message + "</Issue>";
+					errChk(code);
 					fErrorReturn += "<br>" + trs;
 					ierCnt++;
 					if (ierCnt > iErrMaxStr) {
@@ -3086,6 +3092,10 @@ public class FileStructureCheck {
 
 		} catch (ArrayIndexOutOfBoundsException | NullPointerException | IOException | SAXException
 				| ParserConfigurationException ex) {
+			if (ex instanceof SAXException && ex.getMessage() != null && ex.getMessage().contains("DOCTYPE")) {
+				structureIssue("ER_186", "XML DTD", "DTD content is not permitted in package XML.");
+				return;
+			}
 			fErrorReturn += "<br>ER_077: Caught an exception: " + ex.getMessage() + "<br>";
 			fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
 			fxmlErrorReturn += "Caught an exception: " + ex.getMessage();
@@ -3461,7 +3471,7 @@ public class FileStructureCheck {
 								ibaseComp++;
 								// System.out.println(ibaseComp);
 								if (multiCount >= 1) {
-									fErrorReturn += "Basematerials or Compositematerials is above first layer in multiproperties";
+									structureIssue("ER_188", "material ordering", "Base or composite material must be the first layer in multiproperties " + bid + " in " + file);
 								}
 							}
 							if (name.equals("colorgroup"))
@@ -4742,6 +4752,23 @@ public class FileStructureCheck {
 								String objpidChk = "";
 								Node pMesh = cnode.getParentNode();
 								Node pObj = pMesh.getParentNode();
+								// Core defaults an omitted object type to model.
+								String objectType = "model";
+								if (pObj.getAttributes().getNamedItem("type") != null)
+									objectType = pObj.getAttributes().getNamedItem("type").getTextContent().trim();
+								if (!objectType.equals("model") && !objectType.equals("solidsupport")) {
+									String message = "Beamlattice in file: " + file + " with object id: " + objId
+											+ " has object type '" + objectType + "'; only model or solidsupport is allowed.";
+									fErrorReturn += "<br>ER_177: " + message;
+									fxmlErrorReturn += "<Issue issueID=\"ER_177\" severity=\"high\" class=\"structure\" type=\"invalid object type\">"
+											+ message + "</Issue>";
+									errChk("ER_177");
+									ierCnt++;
+									if (ierCnt > iErrMaxStr) {
+										fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+										return;
+									}
+								}
 								if (pObj.getAttributes().getNamedItem("pid") != null)
 									objpidChk = pObj.getAttributes().getNamedItem("pid").getTextContent().trim();
 
@@ -5131,25 +5158,24 @@ public class FileStructureCheck {
 													y2 = verty.get(Integer.parseInt(tst));
 													z2 = vertz.get(Integer.parseInt(tst));
 												}
-												// Check that the length is >=
-												// minlength
+												// Consumers must ignore beams shorter than minlength.
 												Double length = Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)
 														+ (z2 - z1) * (z2 - z1));
 												if (length < minlength) {
-													fErrorReturn += "<br>ER_091: Beam " + (jj + 1)
-															+ " has a length less that the minlength with a length value of "
+													fWarningReturn += "<br>WR_025: Beam " + (jj + 1)
+															+ " has a length less than minlength and must be ignored by consumers; length value: "
 															+ length.toString() + " in file: " + file;
 
-													fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Beam " + (jj + 1)
-															+ " has a length less that the minlength with a length value of "
+													fxmlWarningReturn += "<Issue  issueID=\"WR_025\" severity=\"info\" class=\"structure\" type=\"beam length warning\">";
+													fxmlWarningReturn += "Beam " + (jj + 1)
+															+ " has a length less than minlength and must be ignored by consumers; length value: "
 															+ length.toString() + " in file: " + file;
-													fxmlErrorReturn += "</Issue>";
-													errChk("ER_091");
-													ierCnt++;
-													if (ierCnt > iErrMaxStr) {
-														fErrorReturn += "<br>More than " + iErrMaxStr
-																+ " errors found, stopping..<br>";
+													fxmlWarningReturn += "</Issue>";
+													errChk("WR_025");
+													iwrCnt++;
+													if (iwrCnt > iWrnMaxStr) {
+														fWarningReturn += "<br>More than " + iWrnMaxStr
+																+ " warnings found, stopping..<br>";
 														return;
 													}
 												}
@@ -5703,22 +5729,28 @@ public class FileStructureCheck {
 							String altUUID = cnode.getAttributes().getNamedItem("UUID").getTextContent();
 							idUuid.add(altUUID);
 							fileUuid.add(file);
-							// Searches for matching object ID in any file
+							// Object IDs are local to the model selected by path (or this model).
 							String objectid = cnode.getAttributes().getNamedItem("objectid").getTextContent().trim();
+							String fileName = file;
+							if (cnode.getAttributes().getNamedItem("path") != null) {
+								fileName = cnode.getAttributes().getNamedItem("path").getTextContent();
+							}
 							String id = "";
 							if (node.getParentNode().getAttributes().getNamedItem("id").getTextContent() != null) {
 								id = node.getParentNode().getAttributes().getNamedItem("id").getTextContent();
 							}
 							try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 								boolean fndObj = false;
-								boolean alternativeFirst = false;
 								Enumeration<? extends ZipEntry> entries = zfile.entries();
 								while (entries.hasMoreElements()) {
 									ZipEntry entry = entries.nextElement();
+									if (!fileName.equals("/" + entry.getName())) {
+										continue;
+									}
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
 									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-										DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
 										DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -5732,13 +5764,6 @@ public class FileStructureCheck {
 												fndObj = true;
 												objIdListRef.add("/" + entry.getName() + "|" + objectid);
 												NodeList objectChildren = nObjy.item(ico).getChildNodes();
-												String fileName;
-												if (cnode.getAttributes().getNamedItem("path") != null) {
-													fileName = cnode.getAttributes().getNamedItem("path")
-															.getTextContent();
-												} else {
-													fileName = file;
-												}
 												for (int k = 0; k < objectChildren.getLength(); k++) {
 													if (objectChildren.item(k).getNodeName().contains("alternative")) {
 														fErrorReturn += "<br>ER_140: Object " + objectid + " in "
@@ -5760,7 +5785,7 @@ public class FileStructureCheck {
 											}
 											if (id.contentEquals(nObjy.item(ico).getAttributes().getNamedItem("id")
 													.getTextContent().trim()) && !fndObj
-													&& file.contains(entry.getName())) {
+													&& file.equals(fileName)) {
 												fErrorReturn += "<br>ER_141: Alternative with objectid = " + objectid
 														+ " is positioned before the referenced object";
 												fxmlErrorReturn += "<Issue  issueID=\"ER_141\" severity=\"high\" class=\"structure\" type=\"ID error\">";
@@ -5931,7 +5956,7 @@ public class FileStructureCheck {
 							InputStream zin = zfile.getInputStream(entry);
 							sContent = IOUtils.toString(zin, "UTF-8");
 							if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-								DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+								DocumentBuilderFactory dbFactory = SafeXml.factory();
 								dbFactory.setNamespaceAware(true);// needed to use
 																	// getElementsByTagNameNS
 								DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -6091,7 +6116,7 @@ public class FileStructureCheck {
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
 									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-										DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
 										DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -7016,8 +7041,18 @@ public class FileStructureCheck {
 				}
 			}
 
-			// check resources that basematerials is first and object last.
+			// Keep material ordering; required volumetric/implicit extensions allow
+			// their resources to follow objects.
 			if (node.getNodeName().equals("resources")) {
+				Element model = node.getOwnerDocument().getDocumentElement();
+				boolean relaxedResourceOrdering = false;
+				for (String prefix : model.getAttribute("requiredextensions").trim().split("\\s+")) {
+					String namespace = model.lookupNamespaceURI(prefix);
+					if (VOLUMETRIC_NS.equals(namespace) || IMPLICIT_NS.equals(namespace)) {
+						relaxedResourceOrdering = true;
+						break;
+					}
+				}
 				NodeList childList = node.getChildNodes();
 				Boolean startBase = false;
 				Boolean endBase = false;
@@ -7055,9 +7090,10 @@ public class FileStructureCheck {
 						endBase = true;
 					}
 
-					// if we have set endObject, but find something else, that
-					// is bad
-					if (!name.equals("object") && endObject && !doOnceObj) {
+					boolean extensionResource = VOLUMETRIC_NS.equals(cnode.getNamespaceURI())
+							|| IMPLICIT_NS.equals(cnode.getNamespaceURI());
+					if (!name.equals("object") && endObject && !doOnceObj
+							&& !(relaxedResourceOrdering && extensionResource)) {
 						fErrorReturn += "<br>ER_103: Other resources appeared after object was defined " + " in file: "
 								+ file + ". The object elements should appear last in resources.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_103\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
@@ -7243,23 +7279,6 @@ public class FileStructureCheck {
 			found1 = false;
 			found2 = false;
 
-			System.out.println("norm vector 0: " + normalizedVector[0]);
-			System.out.println("norm vector 1: " + normalizedVector[1]);
-			System.out.println("norm vector 2: " + normalizedVector[2]);
-			System.out.println("");
-			System.out.println("norm v1 0: " + normV1[0]);
-			System.out.println("norm v1 1: " + normV1[1]);
-			System.out.println("norm v1 2: " + normV1[2]);
-			System.out.println("");
-			System.out.println("norm v2 0: " + normV2[0]);
-			System.out.println("norm v2 1: " + normV2[1]);
-			System.out.println("norm v2 2: " + normV2[2]);
-			System.out.println("");
-			System.out.println("norm v3 0: " + normV3[0]);
-			System.out.println("norm v3 1: " + normV3[1]);
-			System.out.println("norm v3 2: " + normV3[2]);
-			System.out.println("");
-			
 			//Calculate scalar products if no values are missing
 			if(!missingValues) {
 				scalarProducts[0] = ((normalizedVector[0] * normV1[0]) + (normalizedVector[1] * normV1[1])
@@ -7367,6 +7386,72 @@ public class FileStructureCheck {
 
 	}
 
+	private void geometryIssue(String code, boolean warning, String message) {
+		if (code.equals("WR_029")) {
+			validationIncomplete = true;
+			// Preserve one incomplete-validation summary even after the warning cap.
+			if (geometryLimitReported) return;
+			geometryLimitReported = true;
+		} else if (warning ? iwrCnt >= Math.max(1, iWrnMaxStr) : ierCnt >= Math.max(1, iErrMaxStr)) return;
+		String xml = "<Issue issueID=\"" + code + "\" severity=\"" + (warning ? "info" : "high")
+				+ "\" class=\"structure\" type=\"geometry\">" + StringEscapeUtils.escapeXml11(message) + "</Issue>";
+		String html = "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		if (warning) { fxmlWarningReturn += xml; fWarningReturn += html; iwrCnt++; }
+		else { fxmlErrorReturn += xml; fErrorReturn += html; ierCnt++; }
+		errChk(code);
+	}
+
+	private void structureIssue(String code, String type, String message) {
+		if (ierCnt >= Math.max(1, iErrMaxStr)) return;
+		fxmlErrorReturn += "<Issue issueID=\"" + code + "\" severity=\"high\" class=\"structure\" type=\"" + type + "\">"
+				+ StringEscapeUtils.escapeXml11(message) + "</Issue>";
+		fErrorReturn += "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		ierCnt++;
+		errChk(code);
+	}
+
+	private void checkModelRules(Document doc, String file) {
+		NodeList nodes = doc.getElementsByTagName("*");
+		for (int i = 0; i < nodes.getLength(); i++) {
+			Element e = (Element)nodes.item(i);
+			if (e.hasAttributeNS("http://www.w3.org/XML/1998/namespace", "space"))
+				structureIssue("ER_184", "XML attribute", "xml:space is not permitted in model markup: " + file);
+			String ns = e.getNamespaceURI();
+			if ((GeometryCheck.CORE.equals(ns) && "base".equals(e.getLocalName()))
+					|| ("http://schemas.microsoft.com/3dmanufacturing/material/2015/02".equals(ns) && "color".equals(e.getLocalName()))) {
+				String value = e.getAttribute(e.hasAttribute("color") ? "color" : "displaycolor");
+				if (!value.matches("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?"))
+					structureIssue("ER_189", "color value", "Invalid hexadecimal color " + value + " in " + file);
+			}
+			if (!GeometryCheck.CORE.equals(ns) || !("component".equals(e.getLocalName()) || "item".equals(e.getLocalName()))) continue;
+			String path = e.getAttributeNS(GeometryCheck.PROD, "path").trim();
+			if (path.isEmpty()) continue;
+			String target = GeometryCheck.part(file, path);
+			String rels = file.substring(0, file.lastIndexOf('/') + 1) + "_rels/" + file.substring(file.lastIndexOf('/') + 1) + ".rels";
+			NodeList links = relationshipRels.get(rels.substring(1));
+			boolean found = false;
+			if (links != null) for (int j = 0; j < links.getLength(); j++) {
+				Element link = (Element)links.item(j);
+				if (relTypes.get(0).equals(link.getAttribute("Type")) && !"External".equals(link.getAttribute("TargetMode"))
+						&& target != null && target.equals(GeometryCheck.part(file, link.getAttribute("Target").trim()))) found = true;
+			}
+			if (!found) structureIssue("ER_185", "model relationship", "Model reference " + path + " in " + file + " requires a 3dmodel relationship in " + rels);
+		}
+	}
+
+	private String declaredContentType(String part) {
+		if (nType_override != null) for (int i = 0; i < nType_override.getLength(); i++) {
+			Element e = (Element)nType_override.item(i);
+			if (part.equals(GeometryCheck.part("/", e.getAttribute("PartName")))) return e.getAttribute("ContentType").trim();
+		}
+		int dot = part.lastIndexOf('.');
+		if (dot >= 0 && nType_default != null) for (int i = 0; i < nType_default.getLength(); i++) {
+			Element e = (Element)nType_default.item(i);
+			if (part.substring(dot + 1).equalsIgnoreCase(e.getAttribute("Extension"))) return e.getAttribute("ContentType").trim();
+		}
+		return "";
+	}
+
 	private boolean overRideFileCheck(String file) {
 		boolean bRes = false;
 		if (sOverRide.size() > 0 && sOverRide.indexOf(file.toLowerCase()) > -1)
@@ -7428,6 +7513,45 @@ public class FileStructureCheck {
 		return fnd;
 	}
 
+	/** Report padding before reference lookup trims it; never change the document. */
+	private boolean checkReferenceWhitespace(Document doc, String file) {
+		// Parts can be parsed again for references or decryption. Warn once per attribute.
+		if (!referenceWhitespaceParts.add(file))
+			return true;
+		NodeList elements = doc.getElementsByTagName("*");
+		for (int i = 0; i < elements.getLength(); i++) {
+			Node element = elements.item(i);
+			for (int j = 0; j < element.getAttributes().getLength(); j++) {
+				Node attribute = element.getAttributes().item(j);
+				// The initial ZIP pass uses a namespace-unaware DOM. Accept any prefix.
+				String name = attribute.getNodeName();
+				if (name.startsWith("xmlns:"))
+					continue;
+				String localName = name.substring(name.indexOf(':') + 1);
+				if (!localName.equals("path") && !localName.equals("slicepath")
+						&& !localName.equals("thumbnail") && !name.equals("Target"))
+					continue;
+				String value = attribute.getTextContent();
+				if (value.equals(value.trim()))
+					continue;
+				String message = "Leading or trailing whitespace in attribute " + name + " on element "
+						+ element.getNodeName() + " in file: " + file + "; reference: [" + value
+						+ "]. Consumers may resolve this reference differently.";
+				String escaped = StringEscapeUtils.escapeXml10(message);
+				fWarningReturn += "<br>WR_026: " + escaped + "<br>";
+				fxmlWarningReturn += "<Issue issueID=\"WR_026\" severity=\"info\" class=\"structure\" type=\"reference whitespace\">"
+						+ escaped + "</Issue>";
+				errChk("WR_026");
+				iwrCnt++;
+				if (iwrCnt > iWrnMaxStr) {
+					fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 	private void backSlashWarn(String loc, String file) {
 		if (!loc.contains("\\"))
 			return;
@@ -7455,7 +7579,7 @@ public class FileStructureCheck {
 			if (!xfile.trim().toLowerCase().startsWith("<?xml"))
 				return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);// needed to use
 												// getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();

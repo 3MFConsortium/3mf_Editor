@@ -6,8 +6,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URL;
 
-import javax.swing.JFrame;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -102,8 +100,11 @@ public class StartUp {
 
 		System.setProperty("jdk.xml.maxOccurLimit", "20000");
 		
+		// Select headless AWT before any Swing components or toolkit are initialized.
+		if (brunCli) {
+			System.setProperty("java.awt.headless", "true");
+		}
 		MainFrame mf = new MainFrame();
-		mf.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		mf.start();
 	}
 

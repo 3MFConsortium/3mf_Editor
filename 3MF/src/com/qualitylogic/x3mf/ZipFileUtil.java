@@ -6,6 +6,7 @@ import java.io.FileOutputStream;
 import java.io.IOException; 
 import java.io.InputStream; 
 import java.io.OutputStream;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -23,7 +24,6 @@ import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.utils.IOUtils;
-import org.apache.commons.io.FileUtils;
 
 /**
  * Zip File Tools
@@ -113,8 +113,9 @@ public class ZipFileUtil {
 
 		@Override
 		public int compare(String str1, String str2) {
-			if(str1.startsWith("_")) return -1;
-			if(str2.startsWith("_")) return 1;
+			if (str1.startsWith("_") != str2.startsWith("_")) {
+				return str1.startsWith("_") ? -1 : 1;
+			}
 			Iterator<String> i1 = splitStringPreserveDelimiter(str1).iterator();
 			Iterator<String> i2 = splitStringPreserveDelimiter(str2).iterator();
 			while (true) {
@@ -133,12 +134,10 @@ public class ZipFileUtil {
 
 				String data1 = i1.next();
 				String data2 = i2.next();
-				if(data1 == "_") return 1;
-				if(data2 == "_") return -1;
 				int result;
 				try {
 					//If both datas are numbers, then compare numbers
-					result = Long.compare(Long.valueOf(data1), Long.valueOf(data2));
+					result = new BigInteger(data1).compareTo(new BigInteger(data2));
 					//If numbers are equal than longer comes first
 					if (result == 0) {
 						result = -Integer.compare(data1.length(), data2.length());
@@ -178,6 +177,20 @@ public class ZipFileUtil {
 	��* @param saveFileDir
 	��* Extract the file storage path, such as "D: / test /"
 	 */ 
+	private static File extractionDestination(File targetDir, String name) throws IOException {
+		// Treat both ZIP and Windows separators as path separators, on every platform.
+		String normalized = name.replace('\\', '/');
+		if (normalized.startsWith("/") || normalized.indexOf(':') >= 0) {
+			throw new IOException("Unsafe archive entry: " + name);
+		}
+		File root = targetDir.getCanonicalFile();
+		File destination = new File(root, normalized).getCanonicalFile();
+		if (!destination.toPath().startsWith(root.toPath()) || destination.equals(root)) {
+			throw new IOException("Archive entry escapes extraction directory: " + name);
+		}
+		return destination;
+	}
+
 	public static void decompressZipAlt(String zipFilePath, String saveFileDir) { 
 		if (isEndsWithZip(zipFilePath)) { 
 			File file = new File(zipFilePath); 
@@ -193,7 +206,7 @@ public class ZipFileUtil {
 					//Then write the file to the specified folder
 					while ((archiveEntry = zais.getNextEntry()) != null) { 
 						if (archiveEntry.isDirectory()) {
-							File curfile = new File(saveFileDir, archiveEntry.getName());
+							File curfile = extractionDestination(new File(saveFileDir), archiveEntry.getName());
 							File parent = curfile.getParentFile();
 							if (!parent.exists()) {
 								parent.mkdirs();
@@ -203,14 +216,14 @@ public class ZipFileUtil {
 							}
 							continue;
 						}
-						File curfile = new File(saveFileDir, archiveEntry.getName());
+						File curfile = extractionDestination(new File(saveFileDir), archiveEntry.getName());
 						File parent = curfile.getParentFile();
 						if (!parent.exists()) {
 							parent.mkdirs();
 						}
-						OutputStream out = new FileOutputStream(curfile);
-						IOUtils.copy(zais, out);
-						out.close();
+						try (OutputStream out = new FileOutputStream(curfile)) {
+							IOUtils.copy(zais, out);
+						}
 
 					} 
 				} catch (Exception e) { 
@@ -242,8 +255,6 @@ public class ZipFileUtil {
 	 */ 
 	public static void decompressZip(String zipFilePath, String saveFileDir) { 
 		File zipFile = new File(zipFilePath);
-		//changing this to read-only due to access issues with a ziptoref file.
-		zipFile.setReadOnly();
 		File targetDir = new File(saveFileDir);
 		ZipFile zip = null;
 		try {
@@ -252,7 +263,7 @@ public class ZipFileUtil {
 			while(entries.hasMoreElements()) {
 				ZipArchiveEntry entry = entries.nextElement();
 				if (entry.isDirectory()) {
-					File curfile = new File(saveFileDir, entry.getName());
+					File curfile = extractionDestination(targetDir, entry.getName());
 					File parent = curfile.getParentFile();
 					if (!parent.exists()) {
 						parent.mkdirs();
@@ -262,7 +273,7 @@ public class ZipFileUtil {
 					}
 					continue;
 				}
-				final File entryDestination = new File(targetDir,  entry.getName());
+				final File entryDestination = extractionDestination(targetDir, entry.getName());
 				File parent = entryDestination.getParentFile();
 				if (!parent.exists()) {
 					parent.mkdirs();
@@ -270,36 +281,22 @@ public class ZipFileUtil {
 				if(!entryDestination.exists()){
 					Files.createFile(entryDestination.toPath());
 				}
-				final InputStream in = zip.getInputStream(entry);
-				final OutputStream out = new FileOutputStream(entryDestination);
-				IOUtils.copy(in, out);
-				IOUtils.closeQuietly(in);
-				IOUtils.closeQuietly(out);
+				try (InputStream in = zip.getInputStream(entry);
+						OutputStream out = new FileOutputStream(entryDestination)) {
+					IOUtils.copy(in, out);
+				}
 				//make sure everything is writable
 				entryDestination.setWritable(true);
 			}
 		} catch (IOException e) {
 			System.out.println("Caught an error with the primary decompress, trying the alternate.");
-			zipFile.setWritable(true);
 			if (zip!= null) try {
 				zip.close();
 			} catch (IOException e2) {
 				e2.printStackTrace();
 			}
-			try {
-				File ztmp = new File("ztmp");
-				if(!ztmp.exists()){
-					Files.createDirectories(ztmp.toPath());
-				} else {
-					FileUtils.cleanDirectory(ztmp);
-				}
-			} catch (IOException e1) {
-				e1.printStackTrace();
-			}; 
 			decompressZipAlt(zipFilePath, saveFileDir);
 		} finally {
-			//make sure everything is writable
-			zipFile.setWritable(true);
 			if (zip!= null) try {
 				zip.close();
 			} catch (IOException e) {
@@ -320,8 +317,6 @@ public class ZipFileUtil {
 	 */ 
 	public static void decompressZipFile(String zipFilePath, String saveFileDir, String file) { 
 		File zipFile = new File(zipFilePath);
-		//changing this to read-only due to access issues with a ziptoref file.
-		zipFile.setReadOnly();
 		File targetDir = new File(saveFileDir);
 		ZipFile zip = null;
 		try {
@@ -332,7 +327,7 @@ public class ZipFileUtil {
 				if (!entry.getName().equals(file)) {
 					continue;
 				}
-				final File entryDestination = new File(targetDir,  entry.getName());
+				final File entryDestination = extractionDestination(targetDir, entry.getName());
 				File parent = entryDestination.getParentFile();
 				if (!parent.exists()) {
 					parent.mkdirs();
@@ -340,11 +335,10 @@ public class ZipFileUtil {
 				if(!entryDestination.exists()){
 					Files.createFile(entryDestination.toPath());
 				}
-				final InputStream in = zip.getInputStream(entry);
-				final OutputStream out = new FileOutputStream(entryDestination);
-				IOUtils.copy(in, out);
-				IOUtils.closeQuietly(in);
-				IOUtils.closeQuietly(out);
+				try (InputStream in = zip.getInputStream(entry);
+						OutputStream out = new FileOutputStream(entryDestination)) {
+					IOUtils.copy(in, out);
+				}
 				//make sure everything is writable
 				entryDestination.setWritable(true);
 				return;
@@ -353,8 +347,6 @@ public class ZipFileUtil {
 			System.out.println("Caught an error with the decompress.");
 			//throw new RuntimeException(e);
 		} finally {
-			//make sure everything is writable
-			zipFile.setWritable(true);
 			if (zip!= null) try {
 				zip.close();
 			} catch (IOException e) {

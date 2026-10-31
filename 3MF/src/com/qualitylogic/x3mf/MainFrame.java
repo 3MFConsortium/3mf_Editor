@@ -77,6 +77,7 @@ import javax.swing.Icon;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JEditorPane;
@@ -137,7 +138,6 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.TransformerFactoryConfigurationError;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-import javax.xml.transform.stream.StreamSource;
 import javax.xml.validation.Schema;
 import javax.xml.validation.SchemaFactory;
 import javax.xml.validation.Validator;
@@ -163,7 +163,7 @@ import org.xml.sax.SAXParseException;
 
 import com.qualitylogic.x3mf.ZipFileUtil.WindowsExplorerComparator;
 
-public class MainFrame extends JFrame implements ActionListener, DocumentListener {
+public class MainFrame extends JPanel implements ActionListener, DocumentListener {
 	/**
 	 * 
 	 */
@@ -197,6 +197,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	private dirPop dPop = new dirPop();
 	private editPop ePop = new editPop();
 	private IniData inDat = new IniData();
+	private final EditorTheme editorTheme = new EditorTheme();
+	private boolean darkMode;
+	private JCheckBoxMenuItem darkModeItem;
 	private PropertyData propDat = new PropertyData();
 	private FileStructureCheck nfsc = new FileStructureCheck();
 	private boolean xmlChanged = false;
@@ -266,7 +269,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	JLabel xmlStat = new JLabel("");
 	public DefaultCaret xmlcaret = (DefaultCaret)xmlEd.getCaret();
 	public JTextArea txtStat = new JTextArea();
-	public static JEditorPane txtConsole = new JEditorPane();
+	public static JEditorPane txtConsole = new EditorTheme.ConsolePane();
 
 	public JScrollPane img_refPane = new JScrollPane(img_ref,
 			JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
@@ -285,6 +288,18 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	public static JCheckBox bnumb = new JCheckBox("Triangle #s ");
 	public static JCheckBox bmesh = new JCheckBox("Mesh Wire ");
 	public static JCheckBox bNoUUIDchk = new JCheckBox("Ignore UUID ");
+	// A top-level window exists only in editor mode. Lightweight Swing components
+	// remain available for the shared validation and HTML reporting code in CLI mode.
+	private JFrame window;
+
+	private java.awt.Container getContentPane() {
+		return this;
+	}
+
+	private void disposeWindow() {
+		if (window != null) window.dispose();
+	}
+
 	public MainFrame() {
 		keyinfo = new ArrayList<KeyInfo>();
 		xsdErrorList = new ArrayList<>(); 
@@ -301,13 +316,18 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				}
 			}});
 
+		if (StartUp.brunCli) return;
+		window = new JFrame();
+		window.setContentPane(this);
+		window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
 		getContentPane().setBackground(new Color(102, 205, 170));
 		doScroll.setBackground(new Color(102, 205, 170));
 		doWarn.setBackground(new Color(102, 205, 170));
 		showAlpha.setBackground(new Color(102, 205, 170));
 		showAlpha.setToolTipText("Display the alpha channel as grayscale with black transparent and white opaque.");
-		setIconImage(Toolkit.getDefaultToolkit().getImage(MainFrame.class.getResource("/resources/qe.png")));
-		setTitle("3MF Edit and Test");
+		window.setIconImage(Toolkit.getDefaultToolkit().getImage(MainFrame.class.getResource("/resources/qe.png")));
+		window.setTitle("3MF Edit and Test");
 		getContentPane().setLayout(springLayout);
 		mfPane.setViewportBorder(new BevelBorder(BevelBorder.LOWERED, null, null, null, null));
 
@@ -529,7 +549,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 
 		JMenuBar menuBar = new JMenuBar();
 		menuBar.setBorder(new BevelBorder(BevelBorder.RAISED));
-		setJMenuBar(menuBar);
+		window.setJMenuBar(menuBar);
 
 		JMenu fileM = new JMenu("File");
 		fileM.setHorizontalAlignment(SwingConstants.LEFT);
@@ -566,6 +586,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		menuBar.add(mntmView);
 		mntmView.add(upFontI);
 		mntmView.add(downFontI);
+		darkModeItem = new JCheckBoxMenuItem("Dark Mode");
+		mntmView.add(darkModeItem);
+		darkModeItem.addActionListener(e -> setDarkMode(darkModeItem.isSelected()));
 
 		JMenu mntmTools = new JMenu("Tools");
 		mntmTools.setHorizontalAlignment(SwingConstants.LEFT);
@@ -781,7 +804,6 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		springLayout.putConstraint(SpringLayout.WEST, showAlpha, 2, SpringLayout.EAST, doWarn);
 
 	}
-	@Override
 	public void dispose() {
 		//save settings on exit
 		setIni();
@@ -797,7 +819,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-		super.dispose();
+		disposeWindow();
 		System.exit(0);
 	}
 	public void start(){
@@ -809,7 +831,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				Files.createDirectories(path);
 			} catch (IOException e) {
 				//fail to create directory
-				if(!StartUp.brunCli){
+				if(StartUp.brunCli){
 					logger.error("Error creating zips directory, zip64 disabled.");
 					e.printStackTrace();
 					zipdir = false;
@@ -890,13 +912,13 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		initiater.addListener(responder);
 		getIni();
 		if(!StartUp.brunCli){
-			this.setBounds(inset, inset, scrSzWid, scrSzHgt);
-			this.setLocation(scrLocX, scrLocY);
-			this.setVisible(true);
+			window.setBounds(inset, inset, scrSzWid, scrSzHgt);
+			window.setLocation(scrLocX, scrLocY);
+			window.setVisible(true);
 			setupFrame();
 			getContentPane().validate();
 			getContentPane().repaint();
-			this.addWindowListener(new java.awt.event.WindowAdapter() {
+			window.addWindowListener(new java.awt.event.WindowAdapter() {
 				@Override
 				public void windowClosing(java.awt.event.WindowEvent windowEvent) {
 					//another close method, clean up ztmp, save settings.
@@ -921,7 +943,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 
 			if(StartUp.fileList.equals("") && StartUp.oneFile.equals("")){
 				logger.error("CLI specified, but neither a file or the file list has been specified. Exiting.");
-				super.dispose();
+				disposeWindow();
 				System.exit(0);
 
 			}
@@ -940,7 +962,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 					} catch (IOException e) {
 						e.printStackTrace();
 					}
-					super.dispose();
+					disposeWindow();
 					System.exit(0);
 				}
 				bChkError = false;
@@ -950,6 +972,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				String szTime = ztimeA(System.currentTimeMillis());
 				if(StartUp.brunVal){
 					chkSchZip();
+					if(bChkError){
+						pf = "Fail";
+					}
 				}
 				if(StartUp.brunStruct){
 					if(!bChkError || StartUp.brunIfFail){
@@ -958,7 +983,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 							pf = "Fail";
 						}
 						if(!fxmlWarningReturn.equals("")){
-							if(pf.equals("")) pf = "Warning";
+							if(pf.equals("Pass")) pf = "Warning";
 						}
 
 					} else {
@@ -1053,7 +1078,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			if(!StartUp.fileList.equals("")){
 				if(!new File(StartUp.fileList).exists()){
 					logger.error("File list specified, but not found for: " + StartUp.fileList + "  Exiting");
-					super.dispose();
+					disposeWindow();
 					System.exit(0);
 				}
 				try {
@@ -1092,6 +1117,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 						saveForConsole = "";
 						if(StartUp.brunVal){
 							chkSchZip();
+							if(bChkError){
+								pf = "Fail";
+							}
 						}
 						if(StartUp.brunStruct){
 							if(!bChkError || StartUp.brunIfFail){
@@ -1100,7 +1128,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 									pf = "Fail";
 								}
 								if(!fxmlWarningReturn.equals("")){
-									if(pf.equals("")) pf = "Warning";
+								if(pf.equals("Pass")) pf = "Warning";
 								}
 							} else {
 								saveForConsole += "<br>Aborting file structure check due to schema violations!<br>";
@@ -1220,7 +1248,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				e.printStackTrace();
 			}
 			logger.info("Finished");
-			super.dispose();
+			disposeWindow();
 			System.exit(0);
 
 
@@ -1251,6 +1279,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			mainFile = "";
 			DefaultMutableTreeNode top = new DefaultMutableTreeNode("Empty");
 			tree = new JTree(top);
+			if (!StartUp.brunCli) editorTheme.apply(tree, darkMode);
 			return tree;
 		}
 		mainFile = selectedFile.getName();
@@ -1260,6 +1289,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		tree.getSelectionModel().setSelectionMode
 		(TreeSelectionModel.SINGLE_TREE_SELECTION);
 		createNodes(top);
+		if (!StartUp.brunCli) editorTheme.apply(tree, darkMode);
 		tree.setShowsRootHandles(true);
 		for (int i = 0; i < tree.getRowCount(); i++) {
 			tree.expandRow(i);
@@ -2742,6 +2772,9 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				FileUtils.cleanDirectory(ztmp);
 			}
 			ZipFileUtil.decompressZip(currentFile,"ztmp");
+			// CLI opening does not build the thumbnail tree, which also loads keys.
+			// Load them here so schema and structure validation can decrypt parts.
+			findKeystore();
 			checkRel0();
 			loadContent();
 			//ZipFileUtil.decompressZipAlt(currentFile,"ztmp");
@@ -2767,6 +2800,15 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 				//limit the size of what we try to validate. I have passed with 341MB.
 				BasicFileAttributes attr = Files.readAttributes(f.toPath(), BasicFileAttributes.class);
 				if(attr.size()> 514215936 ){
+					// A skipped schema check must never produce a successful validation report.
+					bChkError = true;
+					String limitMessage = "Validation incomplete: part " + f.getName()
+							+ " exceeds the schema validation limit of 514215936 bytes.";
+					fxmlSchemaReturn += "<Issue issueID=\"ER_182\" severity=\"moderate\" class=\"schema\" type=\"validation limit\">"
+							+ org.apache.commons.lang3.StringEscapeUtils.escapeXml11(limitMessage) + "</Issue>";
+					saveForConsole += "<font color='red'><br>ER_182: "
+							+ org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(limitMessage) + "</font><br>";
+					addToConsole(saveForConsole);
 					if(!StartUp.brunCli){
 						JOptionPane.showMessageDialog(null, "Part is too large for validation: " + f.getName()   
 						, "Part too large for validation.", JOptionPane.WARNING_MESSAGE);
@@ -2808,7 +2850,8 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 						}
 					}
 				}
-				if(unzipped.startsWith("<?xml")){
+				if(unzipped.startsWith("<?xml") || (f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".model")
+						&& !unzipped.startsWith("%3McF"))){
 					boolean chk = xmlValidCon(unzipped,f.getName());
 					if(!chk) bChkError = true;
 				}
@@ -2821,10 +2864,13 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	}
 	//run the structure check
 	private void chk3MfStructure(){
-		MenuSelectionManager.defaultManager().clearSelectedPath();
-		Component glassPane = ((RootPaneContainer)mfPane.getTopLevelAncestor()).getGlassPane();
-		glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-		glassPane.setVisible(true);
+		Component glassPane = null;
+		if (!StartUp.brunCli) {
+			MenuSelectionManager.defaultManager().clearSelectedPath();
+			glassPane = window.getGlassPane();
+			glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+			glassPane.setVisible(true);
+		}
 		try{
 			nfsc = new FileStructureCheck();
 			nfsc.fCurrentFile = currentFile;
@@ -2832,34 +2878,48 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			nfsc.iErrMaxStr = iErrMaxS;
 			nfsc.keyinfo = keyinfo;
 			nfsc.checkFile();
-			String nsecure = " which appears to be using encryption.";
-			if(nfsc.bnonSecure){
-				nsecure = " which appears to not be using encryption.";
-			}
-			if(nfsc.fErrorReturn != ""){
-				bStructError = true;
-				saveForConsole += "<font color='red'>" + nfsc.fErrorReturn + "<br><br>Structural check failure on " + currentFile + nsecure + "</font><br>";
-				addToConsole(saveForConsole);
-				fxmlErrorReturn = nfsc.fxmlErrorReturn.replace("<br>", "");
-			} else {
-				saveForConsole += "<font color='green'><br>No structural errors found in " + currentFile + nsecure + "</font><br>";
-				addToConsole(saveForConsole);
-			}
-			//if the editor has bdoWarn unchecked and it is not a cli run, or the cli has hide warnings set, skip
-			if(nfsc.fWarningReturn != "" && ((!bdoWarn && !StartUp.brunCli) || (!StartUp.bHideWarnCLI && StartUp.brunCli)) ){
-				bStructError = true;
-				saveForConsole += "<font color='DAA520'><br><br>Warnings (may be intentional edits)<br>" + nfsc.fWarningReturn + "<br><br>Structural check warning on " + currentFile + "</font><br>";
-				addToConsole(saveForConsole);
-				fxmlWarningReturn = nfsc.fxmlWarningReturn.replace("<br>", "");
-			}
-			sErr = nfsc.sErr;
+			reportStructureResult(nfsc);
 		}catch (Exception e){
 			e.printStackTrace();
 		}finally{
-			glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-			glassPane.setVisible(false);
+			if (glassPane != null) {
+				glassPane.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+				glassPane.setVisible(false);
+			}
 
 		}
+	}
+
+	// Presentation preferences must not change a validation result or hide its status.
+	void reportStructureResult(FileStructureCheck check) {
+		boolean errors = !check.fErrorReturn.isEmpty();
+		boolean warnings = !check.fWarningReturn.isEmpty();
+		bStructError = errors || warnings;
+		fxmlErrorReturn = check.fxmlErrorReturn.replace("<br>", "");
+		fxmlWarningReturn = check.fxmlWarningReturn.replace("<br>", "");
+		sErr = check.sErr;
+		String file = org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(check.fCurrentFile);
+		String nsecure = check.bnonSecure ? " which appears to not be using encryption." : " which appears to be using encryption.";
+		if (errors) {
+			saveForConsole += "<font color='red'>" + check.fErrorReturn + "<br><br>Structural check failure on " + file + nsecure + "</font><br>";
+		} else if (!warnings) {
+			saveForConsole += "<font color='green'><br>No structural errors found in " + file + nsecure + "</font><br>";
+		}
+		if (warnings) {
+			boolean details = check.validationIncomplete || (StartUp.brunCli ? !StartUp.bHideWarnCLI : !bdoWarn);
+			saveForConsole += "<font color='DAA520'><br><br>Structural check warning on " + file;
+			if (details) {
+				saveForConsole += "<br>" + check.fWarningReturn;
+			} else {
+				java.util.Set<String> codes = new java.util.LinkedHashSet<String>();
+				java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("issueID=\"(WR_[0-9]+)\"").matcher(fxmlWarningReturn);
+				while (matcher.find()) codes.add(matcher.group(1));
+				if (!codes.isEmpty()) saveForConsole += " (" + String.join(", ", codes) + ")";
+				saveForConsole += ". Warning details are hidden; disable Hide Warnings to view them.";
+			}
+			saveForConsole += "</font><br>";
+		}
+		addToConsole(saveForConsole);
 	}
 
 	/**
@@ -2901,6 +2961,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		getPropDat();
 		//The ini has values like the screen sizing
 		inDat.readIni();
+		if (!StartUp.brunCli) setDarkMode(inDat.darkMode);
 		scrSzHgt = inDat.pscrSzHgt;
 		scrSzWid = inDat.pscrSzWid;
 		sclWid = inDat.psclWid;
@@ -3009,16 +3070,16 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		propDat.username = cusername;
 		propDat.password = cpassword;
 		propDat.writeTxt();
-		int itmp = this.getBounds().height;
+		int itmp = window == null ? 0 : window.getBounds().height;
 		if(itmp > 0)
 			inDat.pscrSzHgt = itmp;
-		itmp = this.getBounds().width;
+		itmp = window == null ? 0 : window.getBounds().width;
 		if(itmp > 0)
 			inDat.pscrSzWid = itmp;
-		itmp = this.getBounds().x;
+		itmp = window == null ? 0 : window.getBounds().x;
 		if(itmp > 0)
 			inDat.pscrLocX = itmp;
-		itmp = this.getBounds().y;
+		itmp = window == null ? 0 : window.getBounds().y;
 		if(itmp > 0)
 			inDat.pscrLocY = itmp;
 		inDat.psclWid = sclWid;
@@ -3042,6 +3103,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			inDat.pNoUUIDchk = false;
 		inDat.bdoScroll = bdoScroll;
 		inDat.bdoWarn = bdoWarn;
+		if (!StartUp.brunCli) inDat.darkMode = darkMode;
 		if(lastFile == null) lastFile = "";
 		inDat.lastFile = lastFile;
 		inDat.thumbDir = thumbDir;
@@ -3068,10 +3130,12 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		bedBuffer = propDat.bedBuffer;
 		align_out_of_bounds_only = propDat.align_out_of_bounds_only;
 		alignOrigin = propDat.alignOrigin;
-		if(bSChkWerrors){
-			doStructureI.setText("Structure Check Override Off");
-		} else {
-			doStructureI.setText("Structure Check Override On");
+		if (!StartUp.brunCli) {
+			if(bSChkWerrors){
+				doStructureI.setText("Structure Check Override Off");
+			} else {
+				doStructureI.setText("Structure Check Override On");
+			}
 		}
 	}
 	public void loadContent(){
@@ -3093,7 +3157,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			}
 	
 			//check content types:
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc;
@@ -3155,7 +3219,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			xsdErrorList.clear();
 			schemaValidator.setErrorHandler(new XSDValidationLoggingErrorHandler()); 
 			// validate xml instance against the grammar. 
-			schemaValidator.validate(new StreamSource(new StringReader(tmp))); 
+			schemaValidator.validate(SafeXml.source(tmp));
 			boolean bWarnUUID = false;
 			uWarn = "";
 			if(bNoUUIDchk.isSelected()){
@@ -3318,7 +3382,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			xsdErrorList.clear();
 			schemaValidator.setErrorHandler(new XSDValidationLoggingErrorHandler()); 
 			// validate xml instance against the grammar. 
-			schemaValidator.validate(new StreamSource(new StringReader(tmp))); 
+			schemaValidator.validate(SafeXml.source(tmp));
 			boolean bWarnUUID = false;
 			if(bNoUUIDchk.isSelected()){
 				xsdErrorListRm.clear();
@@ -3427,8 +3491,10 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			}
 
 		} catch (SAXException e) {
-			saveForConsole += "<font color='red'><br>Error in XML validation for \"" 
-					+ name + "\": "  +e.getMessage() + "<br></font>";
+			saveForConsole += "<font color='red'><br>SC_000: "
+					+ org.apache.commons.lang3.StringEscapeUtils.escapeHtml4("Invalid XML in " + name + ": " + e.getMessage()) + "<br></font>";
+			fxmlSchemaReturn += "<Issue issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"XML parse error\">"
+					+ org.apache.commons.lang3.StringEscapeUtils.escapeXml11("Invalid XML in " + name + ": " + e.getMessage()) + "</Issue>";
 			return false;
 		} catch (IOException e) { 
 			saveForConsole += "<font color='red'><br>IO Error in XML validation for \"" 
@@ -3464,6 +3530,18 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 		else
 			return false;
 	}
+	// Apply colors without replacing the XML document or its undo history.
+	void setDarkMode(boolean enabled) {
+		if (StartUp.brunCli) return;
+		darkMode = enabled;
+		if (darkModeItem != null) darkModeItem.setSelected(enabled);
+		editorTheme.apply(this, enabled);
+		((EditorTheme.ConsolePane) txtConsole).setDark(enabled);
+		// Keep the existing change indicator visible on either surface.
+		btnCH.setBackground(Color.GREEN);
+		btnCH.setForeground(Color.BLACK);
+	}
+
 	//text will be added to the console. The expected input is html.
 	private static void addToConsole(String txt){
 		txtConsole.setContentType("text/html");
@@ -3710,7 +3788,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	private String formatXmlString(String file){
 		try{
 			if(file == null || file.contentEquals("")) return "";
-			Document document = DocumentBuilderFactory.newInstance()
+			Document document = SafeXml.factory()
 					.newDocumentBuilder()
 					.parse(new InputSource(new ByteArrayInputStream(file.getBytes("utf-8"))));
 
@@ -4066,7 +4144,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4100,7 +4178,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4142,16 +4220,17 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 	//locate the keystore, if it exists.
 	//if found, load the resource data for decrypting files.
 	private void findKeystore(){
+		// Never retain a previous package's keys, even if relationships are missing.
+		keyinfo.clear();
 		try {
 			//We are not trying to debug the structure here. If we do not find something, just return.
 			File file = new File("ztmp/_rels/.rels");
 			if(!file.exists()) return;
-			keyinfo.clear();
 			String xfile, fFile = "";
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4338,7 +4417,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
@@ -4418,7 +4497,7 @@ public class MainFrame extends JFrame implements ActionListener, DocumentListene
 			xfile = FileUtils.readFileToString(file, "UTF-8");
 			if(!xfile.trim().toLowerCase().startsWith("<?xml"))	return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);//needed to use getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 			Document doc = dBuilder.parse(new InputSource(new ByteArrayInputStream(xfile.getBytes("utf-8"))));
