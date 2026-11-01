@@ -139,7 +139,6 @@ import javax.xml.transform.TransformerFactoryConfigurationError;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.validation.Schema;
-import javax.xml.validation.SchemaFactory;
 import javax.xml.validation.Validator;
 import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
@@ -246,6 +245,9 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	private List<KeyInfo> keyinfo = null;
 	
 	private Map<String, String> contentType = new HashMap<String, String>();
+	private Map<String, String> contentOverrides = new HashMap<String, String>();
+	private boolean packageProduction;
+	private String fxmlSchemaWarnings = "";
 
 	private String fxmlSchemaReturn = "";
 	private String fxmlErrorReturn = "";
@@ -991,6 +993,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						addToConsole(saveForConsole);
 					}
 				}
+				fxmlWarningReturn += fxmlSchemaWarnings;
+				if (pf.equals("Pass") && !fxmlWarningReturn.isEmpty()) pf = "Warning";
 				String addIssue = "";
 				if(!fxmlSchemaReturn.equals("")){
 					int ie = 0;
@@ -1136,6 +1140,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 								addToConsole(saveForConsole);
 							}
 						}
+						fxmlWarningReturn += fxmlSchemaWarnings;
+						if (pf.equals("Pass") && !fxmlWarningReturn.isEmpty()) pf = "Warning";
 						String addIssue = "";
 						if(!fxmlSchemaReturn.equals("")){
 							int ie = 0;
@@ -2766,6 +2772,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	}
 	//unzip a 3mf
 	private void unzip3mf(){
+		packageProduction = false;
 		//clear zips/temp
 		try {
 			File ztmp = new File("ztmp");
@@ -2780,6 +2787,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			findKeystore();
 			checkRel0();
 			loadContent();
+			loadPackageProduction();
 			//ZipFileUtil.decompressZipAlt(currentFile,"ztmp");
 		} catch (IOException e) {
 			e.printStackTrace();
@@ -2794,6 +2802,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	private void chkSchZip(){
 		try{
 			bChkError = false;
+			fxmlSchemaWarnings = "";
 			saveForConsole="";
 			File file = new File("ztmp");
 			Collection<File> files = FileUtils.listFiles(file,TrueFileFilter.TRUE, TrueFileFilter.TRUE);
@@ -2820,6 +2829,10 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					}
 					continue;
 				}
+				String partName = "/" + file.toPath().relativize(f.toPath()).toString().replace('\\', '/');
+				String type = effectiveContentType(partName);
+				boolean modelPart = "application/vnd.ms-package.3dmanufacturing-3dmodel+xml".equals(type);
+				if (!type.isEmpty() && !modelPart && !type.endsWith("+xml") && !"application/xml".equals(type) && !"text/xml".equals(type)) continue;
 				String unzipped = FileUtils.readFileToString(f, "UTF-8");
 				if (unzipped.startsWith("%3McF")) {
 					//see if we can decrypt
@@ -2837,25 +2850,40 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						dcry.sTAG = keyitem.getTAG();
 						try {
 							String dtext = dcry.DoDecrypt();
-							if(!dtext.toLowerCase().startsWith(("<?xml"))){
-							} else {
-								unzipped = dtext;
-								saveForConsole += "<font color='green'><br>Decrypted " + floc  + "</font>";
-								addToConsole(saveForConsole);
-							}
+							unzipped = dtext;
+							saveForConsole += "<font color='green'><br>Decrypted " + floc  + "</font>";
+							addToConsole(saveForConsole);
 						} catch (Exception e) {
+							if (DeCryptModel.hasContentKey(keyitem)) {
+								bChkError = true;
+								String message = "Encrypted part " + partName + " failed authentication or decompression after its content key was recovered.";
+								fxmlSchemaReturn += "<Issue issueID=\"ER_190\" severity=\"high\" class=\"schema\" type=\"encrypted content\">"
+										+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10(message) + "</Issue>";
+								saveForConsole += "<font color='red'><br>ER_190: " + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(message) + "</font><br>";
+								addToConsole(saveForConsole);
+								continue;
+							}
 							if(!StartUp.brunCli){
 								saveForConsole += "<font color='red'><br>Decryption failure for " + floc  + "<br>XML validation aborted for file " + floc + "</font><br>";
 							} else {
 								logger.info("Encrypted Part failed decryption: " + f.getName());
 							}
-							bChkError = true;
+							// Inaccessible bytes do not establish malformed XML.
 						}
 					}
+					if (unzipped.startsWith("%3McF")) {
+						if (!fxmlSchemaWarnings.isEmpty()) continue;
+						String message = "Validation incomplete: encrypted part " + partName + " could not be decrypted; rendering/printing and alternative selection were not evaluated.";
+						fxmlSchemaWarnings += "<Issue issueID=\"WR_031\" severity=\"info\" class=\"schema\" type=\"encrypted content\">"
+								+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10(message) + "</Issue>";
+						saveForConsole += "<font color='DAA520'><br>WR_031: " + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(message) + "</font><br>";
+						addToConsole(saveForConsole);
+						continue;
+					}
 				}
-				if(unzipped.startsWith("<?xml") || (f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".model")
+				if(unzipped.startsWith("<?xml") || ((modelPart || (type.isEmpty() && f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".model")))
 						&& !unzipped.startsWith("%3McF"))){
-					boolean chk = xmlValidCon(unzipped,f.getName());
+					boolean chk = xmlValidCon(unzipped,partName);
 					if(!chk) bChkError = true;
 				}
 			}
@@ -3141,9 +3169,42 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			}
 		}
 	}
+	private String effectiveContentType(String name) {
+		String path = name.replace('\\', '/');
+		if (!path.startsWith("/")) path = "/" + path;
+		String type = contentOverrides.get(path);
+		if (type != null) return type;
+		int dot = path.lastIndexOf('.');
+		type = dot < 0 ? null : contentType.get(path.substring(dot + 1).toLowerCase(java.util.Locale.ROOT));
+		return type == null ? "" : type;
+	}
+
+	private void loadPackageProduction() {
+		try {
+			File relationships = new File("ztmp/_rels/.rels");
+			if (!relationships.isFile()) return;
+			Document doc = ModelSchema.parse(FileUtils.readFileToString(relationships, "UTF-8"));
+			NodeList links = doc.getElementsByTagNameNS("http://schemas.openxmlformats.org/package/2006/relationships", "Relationship");
+			for (int i = 0; i < links.getLength(); i++) {
+				org.w3c.dom.Element link = (org.w3c.dom.Element)links.item(i);
+				if (!"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel".equals(link.getAttribute("Type"))
+						|| "External".equals(link.getAttribute("TargetMode"))) continue;
+				String part = GeometryCheck.part("/", link.getAttribute("Target").trim());
+				if (part == null) continue;
+				File root = new File("ztmp" + part);
+				if (root.isFile() && root.length() <= 200000000)
+					packageProduction |= ModelSchema.usesProduction(FileUtils.readFileToString(root, "UTF-8"));
+			}
+		} catch (IOException | SAXException ex) {
+			// Normal schema/structure validation reports invalid package markup.
+			logger.info("Could not inspect the package Production context: " + ex.getMessage());
+		}
+	}
+
 	public void loadContent(){
 		try {
 			contentType.clear();
+			contentOverrides.clear();
 			File cfile = new File("ztmp/[Content_Types].xml");
 			if(!cfile.exists()){
 				saveForConsole += "<font color='red'><br>Failed to locate the [Content_Types].xml file.</font><br>";
@@ -3170,10 +3231,13 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			for (int i = 0; i < nodeList2.getLength(); i++) {
 				Node node = nodeList2.item(i);
 				if (node.getNodeType() == Node.ELEMENT_NODE) {
-					if(node.getNodeName().equals("Default")){
+					if("Default".equals(node.getLocalName())){
 						String ext = node.getAttributes().getNamedItem("Extension").getTextContent();
 						String typ = node.getAttributes().getNamedItem("ContentType").getTextContent();
-						contentType.put(ext,typ);
+						contentType.put(ext.toLowerCase(java.util.Locale.ROOT),typ.trim());
+					} else if ("Override".equals(node.getLocalName())) {
+						org.w3c.dom.Element override = (org.w3c.dom.Element)node;
+						contentOverrides.put(override.getAttribute("PartName"), override.getAttribute("ContentType").trim());
 					}
 				}
 			}
@@ -3192,7 +3256,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		String uWarn = "";
 		int schemaErrorCount = 0;
 		try {
-			SchemaFactory schemaFactory = SchemaFactory.newInstance("http://www.w3.org/2001/XMLSchema"); 
 			if(schemaLoc.length()<1){
 				getSchemaLoc();
 			}
@@ -3216,7 +3279,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 				return false;
 			}
 			File schemaLocation = new File(schemaLoc + aXsd);
-			Schema schemaGrammar = schemaFactory.newSchema(schemaLocation ); 
+			Schema schemaGrammar = ModelSchema.load(schemaLocation, tmp, packageProduction);
 
 			Validator schemaValidator = schemaGrammar.newValidator(); 
 			xsdErrorList.clear();
@@ -3342,10 +3405,10 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	public boolean xmlValidCon(String tmp, String name) {
 		
 		//named schema validation
-		String upFile = name;
+		String upFile = name.startsWith("/") ? name.substring(1) : name;
 		if(!upFile.startsWith("[Content_Types].")){
 			String ext = upFile.substring(upFile.lastIndexOf(".")+1);
-			String typ = contentType.get(ext);
+			String typ = effectiveContentType(name);
 			if(typ == null) typ = "";
 			if (typ.equals("application/vnd.ms-printing.printticket+xml")){
 				saveForConsole += "<font color='green'><br>XML validation for \"" 
@@ -3356,7 +3419,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		int schemaErrorCount = 0;
 		boolean outXml=false;
 		try {
-			SchemaFactory schemaFactory = SchemaFactory.newInstance("http://www.w3.org/2001/XMLSchema"); 
 			if(schemaLoc.length()<1){
 				getSchemaLoc();
 			}
@@ -3381,7 +3443,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 				return false;
 			}
 			File schemaLocation = new File(schemaLoc + aXsd);
-			Schema schemaGrammar = schemaFactory.newSchema(schemaLocation ); 
+			Schema schemaGrammar = ModelSchema.load(schemaLocation, tmp, packageProduction);
 
 			Validator schemaValidator = schemaGrammar.newValidator(); 
 			xsdErrorList.clear();

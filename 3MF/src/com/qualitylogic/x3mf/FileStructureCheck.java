@@ -139,14 +139,15 @@ public class FileStructureCheck {
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_190", "ER_191", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "WR_030", "WR_031", "ER_176");
 
 	public FileStructureCheck() {
 	}
 
 	public void checkFile() {
+		bdoProduction = false;
 		checkRel0();
 		iWrnMaxStr = iErrMaxStr;
 
@@ -231,6 +232,7 @@ public class FileStructureCheck {
 		geometryLimitReported = false;
 		geometry = new GeometryCheck(this::geometryIssue);
 		referenceWhitespaceParts.clear();
+		inaccessibleParts.clear();
 		aRelFiles.clear();
 		laRelNodes.clear();
 		relationshipRels.clear();
@@ -246,6 +248,8 @@ public class FileStructureCheck {
 				String name = inventory.nextElement().getName();
 				String invalidName = PackageChecks.invalidName(name);
 				if (invalidName != null) structureIssue("ER_183", "part name", invalidName);
+				if (PackageChecks.unescapedUnicode(name)) structureWarning("WR_030", "part name",
+						"Unescaped Unicode in ZIP part name; percent-encoded UTF-8 is recommended for interoperability: " + name);
 				entryNames.add("/" + name);
 				bentryNames.add(name.endsWith(".rels") || name.endsWith("/"));
 			}
@@ -295,6 +299,7 @@ public class FileStructureCheck {
 							String rootname = root.getNodeName();
 							if (rootname.toLowerCase().equals("keystore")) {
 								if (!bKeystoreFound) {
+									structureIssue("ER_191", "keystore relationship", "Keystore " + name + " requires a keystore relationship in _rels/.rels.");
 									fWarningReturn += "<br>WR_019: A keystore file was located but a relationship was not defined in the _rels/.rels file. The file is being treated as not secure.<br>";
 									fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
 									fxmlWarningReturn += "A keystore file was located but a relationship was not defined in the _rels/.rels file. The file is being treated as not secure..";
@@ -1471,43 +1476,8 @@ public class FileStructureCheck {
 							}
 						}
 
-						sContent = "";
-						// see if we can decrypt
-						String floc = ename;
-						// See if we have this in keyinfo
-						KeyInfo keyitem = CheckKeyInfo(floc);
-						if (keyitem != null) {
-							DeCryptModel dcry = new DeCryptModel();
-							dcry.sAAD = keyitem.getAAD();
-							dcry.bSha256 = keyitem.getSha256();
-							dcry.bNoComp = keyitem.getNoComp();
-							dcry.FileLoc = "ztmp" + keyitem.getFile();
-							dcry.sCT = keyitem.getCT();
-							dcry.sIV = keyitem.getIV();
-							dcry.sTAG = keyitem.getTAG();
-							try {
-								String dtext = dcry.DoDecrypt();
-								if (!dtext.toLowerCase().startsWith(("<?xml"))) {
-									zin.close();
-									continue;
-								} else {
-									sContent = dtext;
-								}
-							} catch (Exception e) {
-								fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
-								fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-								fxmlWarningReturn += StringEscapeUtils.escapeXml10("decryption failure in " + floc + ".");
-								fxmlWarningReturn += "</Issue>";
-								errChk("WR_019");
-								iwrCnt++;
-								if (iwrCnt > iWrnMaxStr) {
-									fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
-									zin.close();
-									return;
-								}
-								continue;
-							}
-						}
+						sContent = decryptReference(sContent, ename);
+						if (sContent == null) { zin.close(); continue; }
 					}
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
 						bContent = true;
@@ -1749,7 +1719,7 @@ public class FileStructureCheck {
 						}
 					}
 					if (ename.contentEquals(sRootModel)) {
-						bdoProduction = false;
+						bdoProduction = ModelSchema.usesProduction(doc);
 						Set<String> prefs = findPrefix(doc);
 						NodeList n1 = doc.getElementsByTagName("model");
 						Node n2 = n1.item(0);
@@ -1777,12 +1747,6 @@ public class FileStructureCheck {
 							String[] mprs = mpr.split("\\s+");
 							for (int mm = 0; mm < mprs.length; mm++) {
 								requiredExtensions.add(mprs[mm]);
-							}
-							for (String p : prefs) {
-								for (int j = 0; j < mprs.length; j++) {
-									if (p.contentEquals(mprs[j]))
-										bdoProduction = true;
-								}
 							}
 						}
 
@@ -2479,46 +2443,8 @@ public class FileStructureCheck {
 								if (bchk && zfile.getEntry(fFile.substring(1)).getSize() < 200000000) {
 									InputStream ziny = zfile.getInputStream(zfile.getEntry(fFile.substring(1)));
 									sContent = IOUtils.toString(ziny, "UTF-8");
-									if (sContent.startsWith("%3McF")) {
-										sContent = "";
-										// see if we can decrypt
-										String floc = fFile;
-										// See if we have this in keyinfo
-										KeyInfo keyitem = CheckKeyInfo(floc);
-										if (keyitem != null) {
-											DeCryptModel dcry = new DeCryptModel();
-											dcry.sAAD = keyitem.getAAD();
-											dcry.bSha256 = keyitem.getSha256();
-											dcry.bNoComp = keyitem.getNoComp();
-											dcry.FileLoc = "ztmp" + keyitem.getFile();
-											dcry.sCT = keyitem.getCT();
-											dcry.sIV = keyitem.getIV();
-											dcry.sTAG = keyitem.getTAG();
-											try {
-												String dtext = dcry.DoDecrypt();
-												if (!dtext.toLowerCase().startsWith(("<?xml"))) {
-
-												} else {
-													sContent = dtext;
-												}
-											} catch (Exception e) {
-
-												fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
-												fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-												fxmlWarningReturn += StringEscapeUtils.escapeXml10("decryption failure in " + floc + ".");
-												fxmlWarningReturn += "</Issue>";
-												errChk("WR_019");
-												iwrCnt++;
-												if (iwrCnt > iWrnMaxStr) {
-													fWarningReturn += "<br>More than " + iWrnMaxStr
-															+ " warnings found, stopping..<br>";
-													ziny.close();
-													return;
-												}
-											}
-										}
-
-									}
+									sContent = decryptReference(sContent, fFile);
+									if (sContent == null) { ziny.close(); continue; }
 									if (!sContent.trim().toLowerCase().startsWith("<?xml")) {
 										fErrorReturn += "<br>ER_055: " + fFile
 												+ " was found but did not start with <?xml.<br>";
@@ -2701,46 +2627,8 @@ public class FileStructureCheck {
 								if (bchk && zfile.getEntry(fFile.substring(1)).getSize() < 200000000) {
 									InputStream ziny = zfile.getInputStream(zfile.getEntry(fFile.substring(1)));
 									sContent = IOUtils.toString(ziny, "UTF-8");
-									if (sContent.startsWith("%3McF")) {
-										sContent = "";
-										// see if we can decrypt
-										String floc = fFile;
-										// See if we have this in keyinfo
-										KeyInfo keyitem = CheckKeyInfo(floc);
-										if (keyitem != null) {
-											DeCryptModel dcry = new DeCryptModel();
-											dcry.sAAD = keyitem.getAAD();
-											dcry.bSha256 = keyitem.getSha256();
-											dcry.bNoComp = keyitem.getNoComp();
-											dcry.FileLoc = "ztmp" + keyitem.getFile();
-											dcry.sCT = keyitem.getCT();
-											dcry.sIV = keyitem.getIV();
-											dcry.sTAG = keyitem.getTAG();
-											try {
-												String dtext = dcry.DoDecrypt();
-												if (!dtext.toLowerCase().startsWith(("<?xml"))) {
-
-												} else {
-													sContent = dtext;
-												}
-											} catch (Exception e) {
-
-												fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
-												fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-												fxmlWarningReturn += StringEscapeUtils.escapeXml10("decryption failure in " + floc + ".");
-												fxmlWarningReturn += "</Issue>";
-												errChk("WR_019");
-												iwrCnt++;
-												if (iwrCnt > iWrnMaxStr) {
-													fWarningReturn += "<br>More than " + iWrnMaxStr
-															+ " warnings found, stopping..<br>";
-													ziny.close();
-													return;
-												}
-											}
-										}
-
-									}
+									sContent = decryptReference(sContent, fFile);
+									if (sContent == null) { ziny.close(); continue; }
 									if (!sContent.trim().toLowerCase().startsWith("<?xml")) {
 										fErrorReturn += "<br>ER_059: " + fFile
 												+ " was found but did not start with <?xml.<br>";
@@ -5741,6 +5629,7 @@ public class FileStructureCheck {
 							}
 							try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 								boolean fndObj = false;
+								boolean inaccessible = false;
 								Enumeration<? extends ZipEntry> entries = zfile.entries();
 								while (entries.hasMoreElements()) {
 									ZipEntry entry = entries.nextElement();
@@ -5749,7 +5638,10 @@ public class FileStructureCheck {
 									}
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
-									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
+									zin.close();
+									sContent = decryptReference(sContent, fileName);
+									if (sContent == null) { inaccessible = true; break; }
+									if (!sContent.isEmpty()) {
 										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
@@ -5803,7 +5695,7 @@ public class FileStructureCheck {
 										}
 									}
 								}
-								if (!fndObj) {
+								if (!fndObj && !inaccessible) {
 									fErrorReturn += "<br>ER_057: Did not find an object id for item with objectid="
 											+ objectid + " in " + file + "<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_057\" severity=\"high\" class=\"structure\" type=\"ID error\">";
@@ -7407,6 +7299,55 @@ public class FileStructureCheck {
 		fErrorReturn += "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
 		ierCnt++;
 		errChk(code);
+	}
+
+	private void structureWarning(String code, String type, String message) {
+		if (iwrCnt >= Math.max(1, iWrnMaxStr)) return;
+		fxmlWarningReturn += "<Issue issueID=\"" + code + "\" severity=\"info\" class=\"structure\" type=\"" + type + "\">"
+				+ StringEscapeUtils.escapeXml10(message) + "</Issue>";
+		fWarningReturn += "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		iwrCnt++;
+		errChk(code);
+	}
+
+	private final Set<String> inaccessibleParts = new HashSet<String>();
+	private void inaccessibleModel(String file) {
+		if (!inaccessibleParts.add(file)) return;
+		validationIncomplete = true;
+		if (inaccessibleParts.size() > 1) return;
+		// Keep an explicit incompleteness diagnostic even after the detail limit.
+		String message = "Validation incomplete: encrypted model " + file
+				+ " (and possibly other encrypted parts) could not be decrypted. Its object references and geometry were not checked; rendering/printing and alternative selection were not evaluated.";
+		fxmlWarningReturn += "<Issue issueID=\"WR_031\" severity=\"info\" class=\"structure\" type=\"encrypted content\">"
+				+ StringEscapeUtils.escapeXml10(message) + "</Issue>";
+		fWarningReturn += "<br>WR_031: " + StringEscapeUtils.escapeHtml4(message);
+		iwrCnt++;
+		errChk("WR_031");
+	}
+
+	/** A null result means opaque encrypted bytes, not a proven missing object. */
+	private String decryptReference(String text, String file) {
+		if (!text.startsWith("%3McF")) return text;
+		KeyInfo key = CheckKeyInfo(file);
+		if (key != null) {
+			DeCryptModel decrypt = new DeCryptModel();
+			decrypt.sAAD = key.getAAD();
+			decrypt.bSha256 = key.getSha256();
+			decrypt.bNoComp = key.getNoComp();
+			decrypt.FileLoc = "ztmp" + key.getFile();
+			decrypt.sCT = key.getCT();
+			decrypt.sIV = key.getIV();
+			decrypt.sTAG = key.getTAG();
+			try { return decrypt.DoDecrypt(); }
+			catch (Exception ex) {
+				if (DeCryptModel.hasContentKey(key)) {
+					structureIssue("ER_190", "encrypted content", "Encrypted model " + file + " failed authentication or decompression after its content key was recovered.");
+					return null;
+				}
+			}
+		}
+		inaccessibleModel(file);
+		return null;
 	}
 
 	private void checkModelRules(Document doc, String file) {

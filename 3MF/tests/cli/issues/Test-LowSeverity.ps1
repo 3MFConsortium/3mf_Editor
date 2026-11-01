@@ -110,10 +110,10 @@ function New-PackageVariant([string]$Kind, [string]$Id) {
     } finally { $zip.Dispose() }
     return $target
 }
-$codes = @{'0208_01'='ER_183'; '0405_03'='ER_185'; '0409_01'='ER_184'; '0415_01'='ER_183'; '0419_01'='ER_187'; '0420_01'='ER_186'; '0426_01'='ER_169'; '0604_03'='ER_188'; '0608_01'='ER_189'}
+$codes = @{'0208_01'='WR_030'; '0405_03'='ER_185'; '0409_01'='ER_184'; '0415_01'='ER_183'; '0419_01'='ER_187'; '0420_01'='ER_186'; '0426_01'='ER_169'; '0604_03'='ER_188'; '0608_01'='ER_189'}
 $cases = @(
     foreach ($id in @('0208_01','0208_03','0405_03','0409_01','0415_01','0419_01','0420_01','0426_01','0604_03','0608_01')) {
-        @{ Name = "N_XPM_$id.3mf"; Folder = 'suite2_core_prod_matl/negative_test_cases'; Expected = 'Reject'; Code = $codes[$id] }
+        @{ Name = "N_XPM_$id.3mf"; Folder = 'suite2_core_prod_matl/negative_test_cases'; Expected = $(if ($id -eq '0208_01') { 'Accept' } else { 'Reject' }); Code = $codes[$id]; Warning = ($id -eq '0208_01') }
     }
     @{ Name = 'N_XPX_0205_02.3mf'; Folder = 'suite5_core_prod/negative_test_cases'; Expected = 'Reject' }
     @{ Name = 'P_XPM_0101_01.3mf'; Folder = 'suite2_core_prod_matl/positive_test_cases'; Expected = 'Accept' }
@@ -160,7 +160,7 @@ $results = foreach ($case in $cases) {
                 $row.Status = 'Failed'; $row.Detail += " Missing $($case.Code) in XML/HTML"
             }
             if ($case.Expected -eq 'Accept' -and $html -match 'Structural check failure') { $row.Status = 'Failed'; $row.Detail += ' HTML structural failure on positive control' }
-            if ($case.ContainsKey('Warning') -and $checked.Actual -ne 'Warning') { $row.Status = 'Failed'; $row.Detail += ' Expected Warning for custom relationship' }
+            if ($case.ContainsKey('Warning') -and $case.Warning -and $checked.Actual -ne 'Warning') { $row.Status = 'Failed'; $row.Detail += ' Expected Warning' }
         }
     } elseif ($case.Name -ne 'N_XPM_0208_03.3mf') { $row.Status = 'Error' }
     $row

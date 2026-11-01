@@ -1,6 +1,203 @@
 # Issue fixes and CLI regression checks
 
+## Issue #21 fix: positive fixture acceptance
+
+The editor now accepts the reported PNG thumbnail Overrides and unsupported
+namespace attributes, and validates non-Production models with UUID checking
+enabled. Production object, component and item UUID requirements remain active,
+including in referenced model parts. Namespace declarations alone do not activate
+Production. Structural validation also no longer mistakes a required Slice
+namespace for Production when checking the root build UUID.
+
+`ModelSchema.java` applies the two consolidated-schema compatibility corrections
+in memory: conditional UUID requirements and the missing foreign-attribute
+wildcard on `CT_Object`. Relative imports retain the original schema base URI.
+Production-context detection streams XML without retaining another model DOM.
+The external schema checkout and package XML are not rewritten. Invalid known
+attributes, malformed UUIDs, unqualified unknown attributes and DTDs still fail.
+`MainFrame` resolves effective content types using full package paths, with
+Overrides taking precedence over extension Defaults, before selecting XML parts.
+A thumbnail may share a basename with a genuine model without disabling model
+validation.
+
+Raw Unicode ZIP names now produce interoperability warning `WR_030`, consistent
+with the positive fixtures and Core's SHOULD guidance on Unicode representation.
+This is an explicit consumer policy rather than a claim of full OPC name-syntax
+conformance. Prohibited leading-period names retain `ER_183`, including names
+that also contain Unicode. Percent-encoded Unicode controls remain accepted
+without this warning. The historical `N_XPM_0208_01` now returns Warning; the
+full conformance runner still records that as a negative-fixture mismatch.
+
+Alternative-object lookup now uses the same decryption path as ordinary model
+references. It validates recovered content and still rejects missing object IDs,
+wrong parts, forward references and nested alternatives. If a referenced model
+is inaccessible, `WR_031` explicitly reports incomplete reference/geometry
+validation. It does not misdiagnose inaccessible ciphertext as malformed XML
+(`ER_055`/`ER_059`) or a missing object (`ER_057`). This warning survives schema-only,
+structure-only, list and hidden-warning modes. Diagnostics remain bounded to one
+incompleteness summary per validation phase and are reset between packages.
+
+Inaccessible access rights and corrupt decryptable data are distinct:
+`ER_190` rejects authentication/decompression failures when the wrapped content
+key can be recovered. `ER_191` rejects a keystore missing its required root
+relationship, per [Secure Content 3.2](https://github.com/3MFConsortium/spec_securecontent/blob/master/3MF%20Secure%20Content.md#32-relation-files).
+The serialization regression now requires Warning plus `WR_031` for inaccessible
+`2602`/`2604` content, and explicit errors for the corruption and missing-keystore
+relationship controls. Limited-access `2604` tests explicitly allow editors to
+ignore inaccessible content. Printer expectations remain enforced separately by
+the unmodified full conformance runner.
+
+The CLI remains a schema/structure validator: it does not select a viewer/printer
+consumer or establish that a usable full-resolution alternative can be rendered.
+All six `P_EPX_0740` cases therefore report Warning when content is inaccessible;
+this is not a claim that cases `_05`/`_06` satisfy their printer/viewer criteria.
+The invalid `0909_01` Overrides remain Fail, and missing Appendix C fixtures
+remain outside this repository's fix.
+
+Run the maintained regressions from the project directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-PositiveAcceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ResultXml.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-LowSeverity.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-AlternativeReferences.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1 -Headless
+```
+
+`Test-PositiveAcceptance.ps1` now asserts the resulting policy rather than treating
+every positive fixture as an unconditional Pass. It runs all cases with UUID
+checking enabled, includes generated positive/negative controls and a mixed batch,
+and compiles fresh production sources plus 13 independent schema checks against
+Java 8 APIs. Its `-FixtureName` option selects named official fixtures for a shorter
+rerun. New source/helper/script files are not Git-ignored; generated reports remain
+under ignored `tests/cli/results/`. No ignore rules changed.
+
+Validation on 2026-11-01 with Zulu OpenJDK 21: all 36 issue checks, 13 independent
+schema checks, 47 report fixtures, 22 package/XML helper checks, 30 available
+package regressions, 18 headless Secure Content checks and 15 alternative-reference
+checks passed. The report checks also passed single-file filename escaping, six
+fallback assertions, grouped diagnostics and thirteen explicit warning/error-policy
+assertions. The known missing `N_XPM_0208_03` remains separately unavailable.
+After the streaming refactor, the 13 schema checks and the foreign-attribute and
+four encrypted CLI mode probes were rerun successfully against fresh sources.
+`git diff --check` and PowerShell syntax checks pass. No full conformance suite,
+interactive GUI, rendering or printing run was performed.
+
+Evidence is retained under `tests/cli/results/`:
+
+- `positive-acceptance-20261101-101625-8769b792` (36 cases and mixed aggregate).
+- `positive-acceptance-20261101-101817-73181f8c` and
+  `positive-acceptance-20261101-101915-a6696e07` (final streaming checks).
+- `result-xml-20261101-100950-dba109ed`.
+- `low-severity-20261101-100937`.
+- `secure-content-20261101-100319-ab3d52d2`.
+- `alternative-references-20261101-100331-6ea14f48`.
+
+### Investigation before the fix
+
+[Issue #21](https://github.com/3MFConsortium/3mf_Editor/issues/21), checked live
+on 2026-11-01, is open with no comments. This investigation changes no production
+code or external schemas. Fresh sources at `e136b9aa7265782b2f51e6e53d86d6b22626e3ed`
+were compiled against Java 8 APIs and run with Zulu OpenJDK 21, a 2 GiB heap,
+and the official fixtures at `a63f4bf07c4ab287c8f84f1cdeab8ee92333a577`.
+The v2.4.1 specification SHA256 matches the issue:
+`614D900FD123C6331FDCFA32C88D3F56590A9F393DC0801D3FD95FA2CEDC9752`.
+
+The targeted run covers 17 distinct official fixtures and 21 mode/fixture
+combinations. All processes finish normally within the original 120-second
+per-process budget. Every individual and aggregate report parses as XML.
+There are seven accepted probes and fourteen rejected probes; these counts
+include known fixture defects and consumer exceptions, so they are not a
+conformance score. The script exits 1 to make the rejected acceptance probes
+visible. Four baseline controls pass.
+
+| Area / fixture | Current result | Finding |
+| --- | --- | --- |
+| Thumbnail Override: `P_SPX_0102_03`, `P_SXX_0102_03` | Fail, `SC_000`; structure-only Pass | PNG bytes in a `.model` thumbnail are incorrectly sent to the XML parser despite an explicit `image/png` Override. Confirmed CLI defect. |
+| Unescaped Unicode: `P_SPX_0104_04`, `P_SXX_0104_04` | Fail, `ER_183` | Confirmed mismatch between the current hard-error policy and the positive fixture expectations. This is a policy/specification question, not a missing-file defect. |
+| Unknown attribute: `P_XXX_2202_04` | Fail, `SC_000`; structure-only Pass | Consolidated `CT_Object` lacks an `xs:anyAttribute` wildcard. The foreign `ww:unrecognized` attribute triggers a false rejection. |
+| Encrypted alternatives: `P_EPX_0740_01`, `_05`, `_06` | Fail, `ER_059`, `ER_057`, `WR_019` (also `WR_010` for `_01`, `_05`) | Reports now escape the XML-like diagnostic and parse correctly: issue #22 has resolved the serialization defect. Acceptance remains a separate problem. |
+| Encrypted alternatives: `P_EPX_0740_02`, `_03`, `_04` | Fail, `ER_057`, `WR_019` (also `WR_010` for `_02`, `_04`) | Alternative lookup treats encrypted bytes as an object lookup failure. It does not use the available decryption helper. No consumer-aware fallback selection is implemented in that lookup. |
+| Missing leading slash: `P_SPX_0909_01`, `P_SXX_0909_01` | Fail, `ER_132`, `WR_020` | ZIP inspection confirms many Override PartName values lack `/`. The reported fixture defect remains; weakening the validator is not the appropriate repair. |
+| UUID control: `P_XXX_0101_01` | Auto Pass; strict Fail, `SC_000` | Reproduces the non-Production UUID false rejection on `object` and `item`. The consolidated schema also requires UUID on `component`; contrary to the issue wording, UUID on `build` is already optional in this checkout. |
+| Other controls: `P_SPX_0101_01`, `P_SXX_0101_01`, `P_XPM_0101_01` | Pass | Production and non-Production baseline packages remain accepted under suite-aware UUID settings. |
+
+### Causes and recommended work
+
+1. **Content-type selection:** `MainFrame.java` around lines 2856-2859 selects
+   XML candidates using the `.model` suffix. `xmlValidCon` around lines 3346-3352
+   consults only the extension default, using the basename supplied by its
+   caller. Resolve each part's full package path and effective content type
+   (Override before Default) before choosing a parser/schema. Preserve XML
+   validation for genuine model parts, including models without declarations.
+2. **Consolidated schema:** `qli_3MF.xsd` is supplied by the external fixture
+   checkout, not this editor project. Its `CT_Object` (lines 104-131) requires
+   Production UUID and omits the foreign-attribute wildcard. `CT_Component` and
+   `CT_Item` also require UUID (lines 184 and 201); `CT_Build` does not (line 84).
+   Make the consolidated declarations compatible with non-Production Core
+   files while preserving conditional Production requirements through semantic
+   validation. Do not simply disable all UUID validation. `Run-Conformance.ps1`
+   already works around the missing-UUID issue using Auto mode for non-Production
+   suites; that does not repair normal CLI validation or the external XSD.
+3. **Unicode severity:** `PackageChecks.invalidName` unconditionally returns
+   an error for raw non-ASCII names, and `FileStructureCheck` emits `ER_183`.
+   Core 2.2 combines OPC syntax requirements with SHOULD guidance for Unicode
+   representation. Review the exact OPC rule before changing severity; keep
+   prohibited leading-period names distinct from this Unicode interoperability
+   question. No Unicode policy is changed by this investigation.
+4. **Encrypted alternatives:** the alternative branch in `FileStructureCheck`
+   around lines 5723-5817 reads the ZIP entry, parses it only if it starts with
+   `<?xml`, and otherwise leaves `fndObj` false before emitting `ER_057`.
+   Unlike other model-reference paths, this branch never calls `CheckKeyInfo`
+   or `DoDecrypt`. The component path also emits `ER_059` when the encrypted
+   primary representation cannot be decrypted. Distinguish inaccessible content
+   from a proven missing object, reuse decryption where possible, and evaluate
+   accessible alternatives according to consumer/resolution policy. Suppressing
+   `ER_057` globally would hide genuinely broken references.
+
+The [Core specification, 2.3.3.1](https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md#2331-xml-namespaces)
+requires consumers/editors to ignore unsupported namespaces. Its
+[naming rules](https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md#22-naming-conventions)
+are relevant to the Unicode policy. The
+[Production specification](https://github.com/3MFConsortium/spec_production/blob/master/3MF%20Production%20Extension.md)
+defines alternative priority, access rights and resolution constraints.
+Test specification v2.4.1 explicitly expects rendering for `0740_01` through
+`_04`; `_05` expects a printer exception but viewer rendering; `_06` expects
+exceptions for both. Therefore neither accepting every `P_` case nor rejecting
+every inaccessible encrypted part is a correct consumer policy. This run
+does not establish rendering behavior or that all decryption keys are absent.
+
+### Reproduction and scope
+
+Run from the project directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-PositiveAcceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Run-Conformance.ps1 -Polarity Positive -InventoryOnly -OutputRoot tests/cli/results/issue21-inventory
+```
+
+The targeted script supports `-TestSuiteRoot`, `-TimeoutSeconds` (now defaults
+to 1200 for the large `0909` models), and `-FixtureName` for a narrower rerun.
+It follows suite-aware UUID settings, adds strict/structure-only probes, and
+saves CSV, JUnit, classes, logs and XML/HTML reports under ignored
+`tests/cli/results/positive-acceptance-*`. Evidence for the investigation is in
+`tests/cli/results/positive-acceptance-20261101-094153-ae868777`.
+
+The inventory independently confirms 1719 positive models, the two missing
+Appendix C entries `10/P_3006_01` and `11/P_3212_04`, and 15 additional models
+outside the Appendix C mapping. Evidence is in
+`tests/cli/results/issue21-inventory/20261101-094529-682d39b5`.
+The inventory command exits 1 because entries are missing, as intended.
+The historical count of 693 UUID rejections was not rerun. No full acceptance
+suite, rendering/printing test, interactive GUI test or production fix was
+performed. The new investigation script and this README are not Git-ignored;
+generated results are ignored. `git diff --check` passes.
+
 ## Issue #22: well-formed CLI diagnostic reports
+
+Follow-up in issue #21: the three `P_EPX_0740` serialization controls now report
+Warning with `WR_031`, and inaccessible `2602`/`2604` models also retain explicit
+incompleteness warnings. The historical acceptance results below predate that fix.
 
 [Issue #22](https://github.com/3MFConsortium/3mf_Editor/issues/22) reports raw
 ampersands in schema patterns, raw XML-like diagnostic text, and a duplicated
@@ -836,13 +1033,17 @@ The script also runs from `tests/cli` with
 
 ## Issue #9 fix: package names, markup, relationships, images and materials
 
+Follow-up in issue #21: raw Unicode names now produce `WR_030` rather than
+`ER_183`. `N_XPM_0208_01` is maintained as a Warning-policy regression; the
+original investigation and validation below describe the previous hard-error policy.
+
 The confirmed gaps below are fixed in the structure checker and the shared XML
 parsers. Both XML and HTML reports now carry explicit errors for the affected
 packages.
 
 | Diagnostic | Resulting behavior |
 | --- | --- |
-| `ER_183` | Reject unescaped non-ASCII ZIP part names and part-name segments beginning with a period. Preserve OPC's special `_rels/.rels` name and percent-encoded UTF-8 names. This is targeted validation, not a complete OPC URI validator. |
+| `ER_183` | Reject part-name segments beginning with a period. Preserve OPC's special `_rels/.rels` name. Raw Unicode is now reported separately as `WR_030`; percent-encoded UTF-8 names remain accepted. This is targeted validation, not a complete OPC URI validator. |
 | `ER_184` | Reject `xml:space` in model markup, including nested elements, using its namespace URI. |
 | `ER_185` | Require a `3dmodel` relationship for a Production component/build-item path. Resolve model and relationship paths relative to the referencing part and require an internal relationship. Custom relationship types remain accepted with a warning. |
 | `ER_186` | Reject DTDs before structural DOM parsing. GUI parsing and schema validation use the same DTD prohibition; schema-only rejection is reported as `SC_000`, including model XML without an XML declaration. Internal and external DTDs are both prohibited. |

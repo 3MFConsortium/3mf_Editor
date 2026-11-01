@@ -46,6 +46,15 @@ public class DeCryptModel {
     public DeCryptModel() {
 	}
 
+    /** Distinguish unavailable access rights from bad ciphertext for a recoverable key. */
+    static boolean hasContentKey(KeyInfo info) {
+        if (info == null) return false;
+        try {
+            DeCryptModel decrypt = new DeCryptModel();
+            return decrypt.pemdecrypt(decrypt.getKey(), Base64.getDecoder().decode(info.getCT()), info.getSha256()).length > 0;
+        } catch (Exception ex) { return false; }
+    }
+
     public String DoDecrypt() throws Exception
     {
 		File file = new File(FileLoc);

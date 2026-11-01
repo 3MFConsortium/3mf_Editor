@@ -26,7 +26,9 @@ public class PackageChecksTest {
     }
     public static void main(String[] args) throws Exception {
         check(PackageChecks.invalidName("3D/%D4%AAmodel.model") == null, "encoded Unicode");
-        check(PackageChecks.invalidName("3D/\u052amodel.model") != null, "raw Unicode");
+        check(PackageChecks.invalidName("3D/\u052amodel.model") == null && PackageChecks.unescapedUnicode("3D/\u052amodel.model"), "raw Unicode warning");
+        check(!PackageChecks.unescapedUnicode("3D/%D4%AAmodel.model"), "encoded Unicode has no warning");
+        check(PackageChecks.invalidName("3D/.\u052amodel") != null, "Unicode does not mask leading period");
         check(PackageChecks.invalidName("3D/.model") != null, "leading period");
         check(PackageChecks.invalidName("_rels/.rels") == null, "root relationship exception");
         check(PackageChecks.invalidName("3D/_rels/model.model.rels") == null, "part relationship");

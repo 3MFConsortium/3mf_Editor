@@ -33,7 +33,9 @@ $execution = Invoke-CliProcess (Get-Command $Java).Source @('-cp', ($classes + [
 
 $results = foreach ($model in $cases) {
     $name = $model.Name
-    $expected = if ($model.BaseName -in @('P_XPM_0101_01', 'N_EPX_2606_01')) { 'Accept' } else { 'Reject' }
+    # Access restrictions alone are incomplete editor validation, not proven corruption.
+    # The negative suite's printer acceptance criteria are tracked by Run-Conformance.
+    $expected = if ($model.BaseName -in @('P_XPM_0101_01', 'N_EPX_2606_01') -or $model.BaseName -match '^P_EPX_0740_|^N_EPX_260[24]_') { 'Accept' } else { 'Reject' }
     $report = Join-Path $work ('cliResults/' + [IO.Path]::ChangeExtension($name, '.xml'))
     $checked = Test-CliResult $report $name $expected
     $problems = [Collections.Generic.List[string]]::new()
@@ -41,6 +43,11 @@ $results = foreach ($model in $cases) {
     if ($execution.TimedOut -or $execution.ExitCode -ne 0) { $problems.Add('CLI crashed or timed out') }
     if ($checked.Status -eq 'Passed') {
         $doc = Read-SafeXml ([IO.File]::ReadAllText($report))
+        if ($model.BaseName -match '^P_EPX_0740_|^N_EPX_260[24]_') {
+            if ($doc.DocumentElement.GetAttribute('result') -ne 'Warning' -or -not $doc.SelectSingleNode('//*[@issueID="WR_031"]')) { $problems.Add('Inaccessible content must retain an incomplete-validation warning') }
+        }
+        if ($model.BaseName -eq 'N_EPX_2605_02' -and -not $doc.SelectSingleNode('//*[@issueID="ER_190"]')) { $problems.Add('Missing encrypted-data corruption error') }
+        if ($model.BaseName -eq 'N_EPX_2606_02' -and -not $doc.SelectSingleNode('//*[@issueID="ER_191"]')) { $problems.Add('Missing keystore relationship error') }
         if ($doc.SelectNodes('//Issue/Issue | //PrimaryIssue/Issue').Count) { $problems.Add('Nested diagnostics') }
         foreach ($issue in $doc.DocumentElement.SelectNodes('./Issue | ./PrimaryIssue')) {
             if (-not $issue.InnerText.Trim()) { $problems.Add('Empty diagnostic') }

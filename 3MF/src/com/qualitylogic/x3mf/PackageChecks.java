@@ -8,14 +8,15 @@ import java.io.InputStream;
 final class PackageChecks {
     private PackageChecks() { }
     static String invalidName(String name) {
-        for (int i = 0; i < name.length(); i++)
-            if (name.charAt(i) > 127)
-                return "Unescaped Unicode in ZIP part name; use percent-encoded UTF-8: " + name;
         // OPC's special package relationship part is not an ordinary part name.
         if (name.equals("_rels/.rels")) return null;
         for (String segment : name.split("/"))
             if (segment.startsWith(".")) return "Part name segment must not begin with a period: " + name;
         return null;
+    }
+    static boolean unescapedUnicode(String name) {
+        for (int i = 0; i < name.length(); i++) if (name.charAt(i) > 127) return true;
+        return false;
     }
     static boolean cmykJpeg(InputStream stream) throws IOException {
         DataInputStream in = new DataInputStream(stream);
