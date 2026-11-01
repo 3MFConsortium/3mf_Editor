@@ -1,5 +1,44 @@
 # Issue fixes and CLI regression checks
 
+## Issue #22: well-formed CLI diagnostic reports
+
+[Issue #22](https://github.com/3MFConsortium/3mf_Editor/issues/22) reports raw
+ampersands in schema patterns, raw XML-like diagnostic text, and a duplicated
+`ER_175` opening element. Schema and structural diagnostic text now uses XML 1.0
+escaping, including exception messages, package paths and warning text. Text is
+escaped once, separately from the issue markup. The duplicate opening tag is
+removed and report filenames are escaped in both single-file and list modes.
+Grouped schema diagnostics separate the line number at the final delimiter,
+preserving XSD pattern alternation characters in the message.
+If report formatting fails, the CLI writes a well-formed `Fail` report with an
+explicit `ER_REPORT_XML` serialization diagnostic and the escaped original report.
+Aggregate fallback output retains the `TestResults` wrapper.
+
+Run from the project directory with a JDK and the official fixture checkout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ResultXml.ps1
+```
+
+The script supports `-TestSuiteRoot`, compiles fresh sources and a fallback helper
+against Java 8 APIs, and checks individual and aggregate XML for 47 official
+fixtures across all reported scenario families, including neighboring cases and
+the three `P_EPX_0740` fixtures mentioned in issue #21. It verifies diagnostic
+content, rejects empty/nested diagnostics and unexpected fallback reports, and
+checks single-file output with special characters in the filename, grouped schema
+diagnostics, and six fallback assertions. Reports and process logs go under
+ignored `tests/cli/results/result-xml-*`; the regression files are not ignored.
+Validation on 2026-11-01: all checks passed with Zulu OpenJDK 21 targeting Java 8.
+The baseline reproduced 33 malformed individual reports (30 negative fixtures
+and three positive fixtures); the fixed run produced none. `git diff --check`
+also passed.
+
+This fixes report serialization, not other fixture acceptance policies:
+`P_EPX_0740_01`, `_05`, `_06` still report `Fail`, and `N_EPX_2606_01` still reports
+`Warning`. The positive control `P_XPM_0101_01` reports `Pass`. No decryption or
+geometry rules are changed. This targeted run does not establish full-suite
+conformance or interactive GUI correctness.
+
 Keep issue-fix documentation in this file and all `Test-*.ps1` regression scripts
 in `tests/cli/issues/`. Commands below run from the `3MF` project directory. Shared CLI
 utilities remain in `tests/cli/`, alongside the ignored generated reports.

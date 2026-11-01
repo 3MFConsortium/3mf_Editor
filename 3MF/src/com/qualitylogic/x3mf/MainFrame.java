@@ -1055,7 +1055,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					}
 				}
 				String xout = "<?xml version=\"1.0\" encoding=\"UTF-8\"  standalone=\"no\"?>";
-				xout += "<TestResult file=\"" + selectedFile.getName() + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
+				xout += "<TestResult file=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeXml10(selectedFile.getName()) + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
 				xout += fxmlSchemaReturn + fxmlErrorReturn + fxmlWarningReturn;
 				xout +="</TestResult>";
 				String xmlResult = formatXmlString(xout);
@@ -1063,6 +1063,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					saveForConsole += "<br>Failed the XML format of the structural check for errors!<br>";
 					addToConsole(saveForConsole);
 					logger.error("Failed the XML format of the structural check for errors!");
+					xout = ResultXml.fallback(selectedFile.getName(), szTime, xout);
 				} else {
 					xout = xmlResult;
 				}
@@ -1196,7 +1197,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 							}
 						}
 						String xout = "<?xml version=\"1.0\" encoding=\"UTF-8\"  standalone=\"no\"?>";
-						xout += "<TestResult file=\"" + selectedFile.getName() + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
+						xout += "<TestResult file=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeXml10(selectedFile.getName()) + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
 						xout += fxmlSchemaReturn + fxmlErrorReturn + fxmlWarningReturn;
 						xout +="</TestResult>";
 						String xmlResult = formatXmlString(xout);
@@ -1204,6 +1205,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 							saveForConsole += "<br>Failed the XML format of the structural check for errors!<br>";
 							addToConsole(saveForConsole);
 							logger.error("Failed the XML format of the structural check for errors!");
+							xout = ResultXml.fallback(selectedFile.getName(), szTime, xout);
 						} else {
 							xout = xmlResult;
 						}
@@ -1224,6 +1226,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						if(xmlResult.equals("")){
 							saveForConsole += "<br>Failed the XML format of the structural check for errors!<br>";
 							logger.error("Failed the XML format of the structural check for errors!");
+							xout = ResultXml.fallbackAggregate(startTime, xout);
 							addToConsole(saveForConsole);
 						} else {
 							xout = xmlResult;
@@ -2805,7 +2808,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					String limitMessage = "Validation incomplete: part " + f.getName()
 							+ " exceeds the schema validation limit of 514215936 bytes.";
 					fxmlSchemaReturn += "<Issue issueID=\"ER_182\" severity=\"moderate\" class=\"schema\" type=\"validation limit\">"
-							+ org.apache.commons.lang3.StringEscapeUtils.escapeXml11(limitMessage) + "</Issue>";
+							+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10(limitMessage) + "</Issue>";
 					saveForConsole += "<font color='red'><br>ER_182: "
 							+ org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(limitMessage) + "</font><br>";
 					addToConsole(saveForConsole);
@@ -3269,11 +3272,13 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						if (!type.equals(cur)){
 							ict = 0;
 							type = cur;
-							String[] sErrType2 = sErr.split("\\|");
+							int lineSeparator = sErr.lastIndexOf('|');
+							String[] sErrType2 = {sErr.substring(0, lineSeparator), sErr.substring(lineSeparator + 1)};
 							xsdErrorText.append("<br>line: <a href=\"" + sErrType2[1]
 									+ "\">" + sErrType2[1] + "</a>:" + sErrType2[0] + "<br>"); 
 						} else if(ict<iErrMaxV){
-							String[] sErrType2 = sErr.split("\\|");
+							int lineSeparator = sErr.lastIndexOf('|');
+							String[] sErrType2 = {sErr.substring(0, lineSeparator), sErr.substring(lineSeparator + 1)};
 							xsdErrorText.append("line: <a href=\"" + sErrType2[1]
 									+ "\">" + sErrType2[1] + "</a>:" + sErrType2[0] + "<br>"); 
 						}
@@ -3371,7 +3376,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			if (!(new File(schemaLoc + aXsd).exists())){
 				addToConsole("<br>Could not find schema in: " + schemaLoc + "<br>");
 				fxmlSchemaReturn += "<Issue  issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"file  error\">";
-				fxmlSchemaReturn +="Could not find schema in: " + schemaLoc;
+				fxmlSchemaReturn +=org.apache.commons.lang3.StringEscapeUtils.escapeXml10("Could not find schema in: " + schemaLoc);
 				fxmlSchemaReturn += "</Issue>";
 				return false;
 			}
@@ -3431,20 +3436,22 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						if (!type.equals(cur)){
 							ict = 0;
 							type = cur;
-							String[] sErrType2 = sErr.split("\\|");
+							int lineSeparator = sErr.lastIndexOf('|');
+							String[] sErrType2 = {sErr.substring(0, lineSeparator), sErr.substring(lineSeparator + 1)};
 							xsdErrorText.append("<br>line: " + sErrType2[1]
 									+ " " + sErrType2[0] + "<br>"); 
 							fxmlSchemaReturn += "<Issue  issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"validation  error\">";
-							fxmlSchemaReturn +="line: " + sErrType2[1]
-									+ " " + sErrType2[0] + " In " + name;
+							fxmlSchemaReturn +=org.apache.commons.lang3.StringEscapeUtils.escapeXml10("line: " + sErrType2[1]
+									+ " " + sErrType2[0] + " In " + name);
 							fxmlSchemaReturn += "</Issue>";
 						} else if(ict<iErrMaxV){
-							String[] sErrType2 = sErr.split("\\|");
+							int lineSeparator = sErr.lastIndexOf('|');
+							String[] sErrType2 = {sErr.substring(0, lineSeparator), sErr.substring(lineSeparator + 1)};
 							xsdErrorText.append("line: " + sErrType2[1]
 									+ " " + sErrType2[0] + "<br>"); 
 							fxmlSchemaReturn += "<Issue  issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"validation  error\">";
-							fxmlSchemaReturn +="line: " + sErrType2[1]
-									+ " " + sErrType2[0] + " In " + name;
+							fxmlSchemaReturn +=org.apache.commons.lang3.StringEscapeUtils.escapeXml10("line: " + sErrType2[1]
+									+ " " + sErrType2[0] + " In " + name);
 							fxmlSchemaReturn += "</Issue>";
 						}
 					}
@@ -3466,8 +3473,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						.append(sError)
 						.append("<br>");
 						fxmlSchemaReturn += "<Issue  issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"validation  error\">";
-						fxmlSchemaReturn +="line: " + saxParseException.getLineNumber()
-						+ " " + saxParseException.getMessage() + " In " + name;
+						fxmlSchemaReturn +=org.apache.commons.lang3.StringEscapeUtils.escapeXml10("line: " + saxParseException.getLineNumber()
+						+ " " + saxParseException.getMessage() + " In " + name);
 						fxmlSchemaReturn += "</Issue>";
 						if (ict > iErrMaxV){
 							break;
@@ -3494,7 +3501,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			saveForConsole += "<font color='red'><br>SC_000: "
 					+ org.apache.commons.lang3.StringEscapeUtils.escapeHtml4("Invalid XML in " + name + ": " + e.getMessage()) + "<br></font>";
 			fxmlSchemaReturn += "<Issue issueID=\"SC_000\" severity=\"critical\" class=\"schema\" type=\"XML parse error\">"
-					+ org.apache.commons.lang3.StringEscapeUtils.escapeXml11("Invalid XML in " + name + ": " + e.getMessage()) + "</Issue>";
+					+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10("Invalid XML in " + name + ": " + e.getMessage()) + "</Issue>";
 			return false;
 		} catch (IOException e) { 
 			saveForConsole += "<font color='red'><br>IO Error in XML validation for \"" 
