@@ -7,13 +7,17 @@ param(
     [string]$Java = 'java',
     [string]$Javac = 'javac',
     [ValidateRange(1, 11)][int[]]$Suite = (1..11),
+    [ValidateSet('All', 'Positive', 'Negative')][string]$Polarity = 'All',
     [ValidateRange(1, 100)][int]$BatchSize = 1,
     [ValidateRange(1, 3600)][int]$TimeoutSeconds = 180,
     [string]$OutputRoot,
     [switch]$StrictWarnings,
+    [ValidateSet('Auto', 'Strict', 'Ignore')][string]$UuidMode = 'Auto',
     [switch]$InventoryOnly
 )
 $ErrorActionPreference = 'Stop'
+# p:UUID is required only by Production extension tests (suites 1, 2, 5); optional elsewhere.
+$ProductionSuites = @(1, 2, 5)
 . (Join-Path $PSScriptRoot 'Conformance.ps1')
 try {
     if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../test_suites' }
@@ -28,7 +32,7 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $SchemaRoot $required))) { throw "Missing schema: $required" }
     }
     $specCases = Get-SpecificationCases $Specification
-    $cases = @(Get-ModelCases $TestSuiteRoot $Suite)
+    $cases = @(Get-ModelCases $TestSuiteRoot $Suite $Polarity)
     if ($cases.Count -eq 0) { throw 'No test models discovered' }
     foreach ($number in $Suite) {
         if (@($cases | Where-Object Suite -eq $number).Count -eq 0) { throw "No models discovered for requested suite $number" }
@@ -37,16 +41,16 @@ try {
     [void](New-Item -ItemType Directory -Path $run)
     $cases | Export-Csv (Join-Path $run 'inventory.csv') -NoTypeInformation -Encoding UTF8
     $present = @{}; foreach ($case in $cases) { $present[$case.SpecKey] = $true }
-    $missing = @($specCases.Keys | Sort-Object | Where-Object { $specCases[$_].Suite -in $Suite -and -not $present.ContainsKey($_) })
+    $missing = @($specCases.Keys | Sort-Object | Where-Object { $specCases[$_].Suite -in $Suite -and ($Polarity -eq 'All' -or $specCases[$_].Polarity -eq $Polarity.Substring(0, 1)) -and -not $present.ContainsKey($_) })
     $extra = @($cases | Where-Object { -not $specCases.ContainsKey($_.SpecKey) } | Select-Object Suite, Name, SpecKey)
     $metadata = [ordered]@{
         SpecificationUrl = 'https://github.com/3MFConsortium/test_suites/blob/master/test_specification/3MF_Test_Specification_v2_4_1.docx'
         Specification = $Specification; SpecificationSHA256 = (Get-FileHash $Specification -Algorithm SHA256).Hash
-        TestSuiteRoot = $TestSuiteRoot; SchemaRoot = $SchemaRoot; SelectedSuites = $Suite
+        TestSuiteRoot = $TestSuiteRoot; SchemaRoot = $SchemaRoot; SelectedSuites = $Suite; Polarity = $Polarity
         Models = $cases.Count; MissingFromCheckout = $missing; NotInAppendixC = $extra
         Scope = 'CLI schema/structure acceptance only. Rendering, printing, alternative selection, colors and geometry appearance require manual verification.'
         StrictWarnings = [bool]$StrictWarnings; InventoryOnly = [bool]$InventoryOnly
-        BatchSize = $BatchSize; TimeoutSeconds = $TimeoutSeconds; UUIDChecksEnabled = $true
+        BatchSize = $BatchSize; TimeoutSeconds = $TimeoutSeconds; UuidMode = $UuidMode; ProductionSuites = $ProductionSuites
     }
     $metadata | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $run 'summary.json') -Encoding UTF8
     Write-Host "Discovered $($cases.Count) models; $($missing.Count) missing Appendix C entries; $($extra.Count) additional models."
@@ -95,7 +99,8 @@ try {
                 'iErrMaxValidataion = "100"'
             )
             $settings | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
-            'pNoUUIDchk = "false"' | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+            $ignoreUuid = $UuidMode -eq 'Ignore' -or ($UuidMode -eq 'Auto' -and [int]$group.Name -notin $ProductionSuites)
+            ('pNoUUIDchk = "' + $(if ($ignoreUuid) { 'true' } else { 'false' }) + '"') | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
             Write-Host "Suite $($group.Name): $($offset + 1)-$($offset + $batch.Count)/$($models.Count)"
             $execution = Invoke-CliProcess $javaPath ($launch + @('-C', '-L', 'files.txt', '-I')) $work $TimeoutSeconds
             foreach ($case in $batch) {

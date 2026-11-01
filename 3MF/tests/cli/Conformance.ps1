@@ -52,7 +52,7 @@ function Get-SpecificationCases([string]$Path) {
     return $cases
 }
 
-function Get-ModelCases([string]$Root, [int[]]$Suites) {
+function Get-ModelCases([string]$Root, [int[]]$Suites, [string]$Polarities = 'All') {
     $seen = @{}
     foreach ($dir in Get-ChildItem -LiteralPath $Root -Directory | Sort-Object Name) {
         if ($dir.Name -notmatch '^suite(\d+)_') { continue }
@@ -73,6 +73,7 @@ function Get-ModelCases([string]$Root, [int[]]$Suites) {
             $key = "$suite/$($file.Name)"
             if ($seen.ContainsKey($key)) { throw "Duplicate output basename in suite: $key" }
             $seen[$key] = $true
+            if ($Polarities -ne 'All' -and $polarity -ne $Polarities.Substring(0, 1)) { continue }
             [pscustomobject]@{
                 Suite = $suite; Name = $file.Name; Path = $file.FullName
                 Expected = $(if ($polarity -eq 'P') { 'Accept' } else { 'Reject' })
