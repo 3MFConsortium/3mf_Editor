@@ -8,7 +8,7 @@ $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
 $sourceNames = @('XmlTextPane', 'XmlEditorKit', 'XmlViewFactory', 'XmlView')
 $sources = @($sourceNames | ForEach-Object { Join-Path $project "src/com/qualitylogic/x3mf/$_.java" })
-$sources += Join-Path $project 'tests/src/LongLineProbe.java'
+$sources += Join-Path $project 'tests/cli/src/LongLineProbe.java'
 $compile = Invoke-CliProcess (Get-Command $Javac).Source (@('-encoding', 'UTF-8', '-d', $classes) + $sources) $run 60
 if ($compile.TimedOut -or $compile.ExitCode -ne 0) { throw "Compilation failed; see $run" }
 $cases = @(

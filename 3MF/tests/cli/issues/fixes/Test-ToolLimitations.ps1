@@ -23,7 +23,7 @@ Get-Content (Join-Path $run 'stdout.log'), (Join-Path $run 'stderr.log') | Set-C
 if ($compiled.TimedOut -or $compiled.ExitCode -ne 0) { throw "Compilation failed; see $run/compile.log" }
 Copy-Item -LiteralPath (Join-Path $project 'src/resources') -Destination $classes -Recurse
 $classpath = $classes + [IO.Path]::PathSeparator + (Join-Path $project 'jar/*')
-$helper = Invoke-CliProcess (Get-Command $Javac).Source @('--release', '17', '-encoding', 'UTF-8', '-cp', $classpath, '-d', $classes, (Join-Path $project 'tests/cli/GeometryCheckTest.java')) $run 60
+$helper = Invoke-CliProcess (Get-Command $Javac).Source @('--release', '17', '-encoding', 'UTF-8', '-cp', $classpath, '-d', $classes, (Join-Path $project 'tests/cli/src/GeometryCheckTest.java')) $run 60
 Get-Content (Join-Path $run 'stdout.log'), (Join-Path $run 'stderr.log') | Set-Content (Join-Path $run 'compile-helper.log') -Encoding UTF8
 if ($helper.TimedOut -or $helper.ExitCode -ne 0) { throw "Test helper compilation failed; see $run/compile-helper.log" }
 $unit = Invoke-CliProcess (Get-Command $Java).Source @('-cp', $classpath, 'com.qualitylogic.x3mf.GeometryCheckTest', $run) $run 60

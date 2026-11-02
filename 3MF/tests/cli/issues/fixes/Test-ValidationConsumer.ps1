@@ -10,7 +10,7 @@ $run=Join-Path $project ('tests/cli/results/validation-consumer-'+(Get-Date -For
 $classes=Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
 $sources=@(Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java'|ForEach-Object {'"'+$_.FullName.Replace('\','/')+'"'})
-foreach($name in @('ValidationConsumerTest','ModelRulesTest','ModelSchemaTest','AlternativePolicyTest')){$sources+='"'+(Join-Path $project ('tests/cli/'+$name+'.java')).Replace('\','/')+'"'}
+foreach($name in @('ValidationConsumerTest','ModelRulesTest','ModelSchemaTest','AlternativePolicyTest')){$sources+='"'+(Join-Path $project ('tests/cli/src/'+$name+'.java')).Replace('\','/')+'"'}
 [IO.File]::WriteAllLines((Join-Path $run 'sources.txt'),[string[]]$sources,[Text.UTF8Encoding]::new($false))
 $compiled=Invoke-CliProcess (Get-Command $Javac).Source @('--release','8','-encoding','UTF-8','-cp',(Join-Path $project 'jar/*'),'-d',$classes,('@'+(Join-Path $run 'sources.txt'))) $run 180
 Get-Content (Join-Path $run 'stdout.log'),(Join-Path $run 'stderr.log')|Set-Content (Join-Path $run 'compile.log') -Encoding UTF8

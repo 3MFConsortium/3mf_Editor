@@ -6,7 +6,7 @@ $project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $run = Join-Path $PSScriptRoot ('../../results/zip-utils-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
-$sources = @((Join-Path $project 'src/com/qualitylogic/x3mf/ZipFileUtil.java'), (Join-Path $project 'tests/src/ZipFileUtilTest.java'))
+$sources = @((Join-Path $project 'src/com/qualitylogic/x3mf/ZipFileUtil.java'), (Join-Path $project 'tests/cli/src/ZipFileUtilTest.java'))
 $sourceList = Join-Path $run 'sources.txt'
 [IO.File]::WriteAllLines($sourceList, [string[]]@($sources | ForEach-Object { '"' + $_.Replace('\', '/') + '"' }), [Text.UTF8Encoding]::new($false))
 $compiled = Invoke-CliProcess (Get-Command $Javac).Source @('-encoding', 'UTF-8', '-cp', (Join-Path $project 'jar/*'), '-d', $classes, "@$sourceList") $run 180

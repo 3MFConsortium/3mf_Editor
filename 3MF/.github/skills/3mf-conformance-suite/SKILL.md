@@ -80,4 +80,5 @@ Baseline (spec v2.4.1, 552 models): 444 matched, 78 mismatched, 30 unverifiable 
 ## Rules
 
 - Do not edit fixtures in `test_suites`. Do not waive mismatches; report them with their classification.
+- Keep all Java test sources and helpers in `tests/cli/src/`. Update regression-script compilation paths when moving or adding helpers.
 - Keep results under `tests\cli\results\` (git-ignored). Record the spec SHA256 and test_suites commit with any report.

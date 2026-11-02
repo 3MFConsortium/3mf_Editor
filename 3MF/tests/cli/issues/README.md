@@ -616,7 +616,7 @@ conformance or interactive GUI correctness.
 Keep issue-fix documentation in this file and issue-specific PowerShell scripts
 in `tests/cli/issues/fixes/`. Commands below run from the `3MF` project directory. Shared CLI
 utilities remain in `tests/cli/`, alongside the ignored generated reports.
-Java test helper sources live in `tests/src/` and `tests/cli/` and are compiled explicitly by the
+Java test helper sources live in `tests/cli/src/` and are compiled explicitly by the
 regression scripts.
 
 Runs the 3MF Editor CLI against all model files in all 11 official suites and verifies its XML results using the positive/negative convention in section 5.1 of the [3MF Test Specification v2.4.1](https://github.com/3MFConsortium/test_suites/blob/master/test_specification/3MF_Test_Specification_v2_4_1.docx). Reads Appendix C directly from the DOCX to check that the checkout contains each specified suite/scenario/iteration. Duplicate Appendix C rows are treated as one membership entry.
@@ -657,7 +657,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-
 ```
 
 This compiles production code against Java 8 APIs, uses the actual official
-fixture with `tests/cli/StructureWarningTest.java` to test the GUI presenter
+fixture with `tests/cli/src/StructureWarningTest.java` to test the GUI presenter
 headlessly, and runs six CLI cases against fresh sources. All ten presenter
 checks (GUI/CLI preference combinations, a positive result after a warning, and
 an error control) and six CLI checks pass. The CLI checks cover single-file and
@@ -699,7 +699,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-
 The script accepts `-TestSuiteRoot PATH`, `-HeapMB` (default 2048) and
 `-TimeoutSeconds` (default 90). It compiles production sources with `--release 8`
 to check the IDE/CI API and bytecode target, and separately compiles the independent
-`tests/cli/GeometryCheckTest.java` helper with `--release 17`, then runs unchanged official fixtures
+`tests/cli/src/GeometryCheckTest.java` helper with `--release 17`, then runs unchanged official fixtures
 in isolated JVMs with schema/structure validation and UUID checking enabled.
 The helper covers winding, manifold edges, object-type exceptions, a nested
 cavity, mirrors, stable volume calculations, composed transforms and part units,
@@ -1313,7 +1313,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-
 ```
 
 The script compiles only the four editor component classes and
-`tests/src/LongLineProbe.java`, then runs each case in a separate headless JVM.
+`tests/cli/src/LongLineProbe.java`, then runs each case in a separate headless JVM.
 The internal watchdog dumps the Swing thread and exits 124 on timeout;
 `-TimeoutSeconds` changes its default 20-second budget. The outer harness also
 enforces a process timeout. This is a measurement/reproduction harness, not a

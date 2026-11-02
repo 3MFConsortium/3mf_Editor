@@ -10,7 +10,7 @@ $run = Join-Path $project ('tests/cli/results/result-xml-' + (Get-Date -Format '
 $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
 $sources = @(Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java' | ForEach-Object { '"' + $_.FullName.Replace('\', '/') + '"' })
-$sources += '"' + (Join-Path $project 'tests/cli/ResultXmlTest.java').Replace('\', '/') + '"'
+$sources += '"' + (Join-Path $project 'tests/cli/src/ResultXmlTest.java').Replace('\', '/') + '"'
 [IO.File]::WriteAllLines((Join-Path $run 'sources.txt'), [string[]]$sources, [Text.UTF8Encoding]::new($false))
 $compiled = Invoke-CliProcess (Get-Command $Javac).Source @('--release', '8', '-encoding', 'UTF-8', '-cp', (Join-Path $project 'jar/*'), '-d', $classes, ('@' + (Join-Path $run 'sources.txt'))) $run 180
 if ($compiled.TimedOut -or $compiled.ExitCode -ne 0) { throw "Compilation failed; see $run/stderr.log" }

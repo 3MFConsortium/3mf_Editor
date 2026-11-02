@@ -10,8 +10,8 @@ $run = Join-Path $project ('tests/cli/results/secure-content-' + (Get-Date -Form
 $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
 $sources = @(Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java' | ForEach-Object { '"' + $_.FullName.Replace('\', '/') + '"' })
-$sources += '"' + (Join-Path $project 'tests/src/SecureContentFixtures.java').Replace('\', '/') + '"'
-$sources += '"' + (Join-Path $project 'tests/src/CliWindowTest.java').Replace('\', '/') + '"'
+$sources += '"' + (Join-Path $project 'tests/cli/src/SecureContentFixtures.java').Replace('\', '/') + '"'
+$sources += '"' + (Join-Path $project 'tests/cli/src/CliWindowTest.java').Replace('\', '/') + '"'
 $sourceList = Join-Path $run 'sources.txt'
 [IO.File]::WriteAllLines($sourceList, [string[]]$sources, [Text.UTF8Encoding]::new($false))
 $compiled = Invoke-CliProcess (Get-Command $Javac).Source @('-encoding', 'UTF-8', '-cp', (Join-Path $project 'jar/*'), '-d', $classes, "@$sourceList") $run 180

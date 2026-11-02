@@ -17,7 +17,7 @@ Get-Content (Join-Path $run 'stdout.log'), (Join-Path $run 'stderr.log') | Set-C
 if ($compiled.TimedOut -or $compiled.ExitCode -ne 0) { throw "Compilation failed; see $run/stderr.log" }
 Copy-Item -LiteralPath (Join-Path $project 'src/resources') -Destination $classes -Recurse
 $classpath = $classes + [IO.Path]::PathSeparator + (Join-Path $project 'jar/*')
-$helper = Invoke-CliProcess (Get-Command $Javac).Source @('--release','8','-d',$classes,(Join-Path $project 'src/com/qualitylogic/x3mf/PackageChecks.java'),(Join-Path $project 'src/com/qualitylogic/x3mf/SafeXml.java'),(Join-Path $project 'tests/cli/PackageChecksTest.java')) $run 60
+$helper = Invoke-CliProcess (Get-Command $Javac).Source @('--release','8','-d',$classes,(Join-Path $project 'src/com/qualitylogic/x3mf/PackageChecks.java'),(Join-Path $project 'src/com/qualitylogic/x3mf/SafeXml.java'),(Join-Path $project 'tests/cli/src/PackageChecksTest.java')) $run 60
 if ($helper.TimedOut -or $helper.ExitCode -ne 0) { throw "Helper compilation failed: $run/stderr.log" }
 $unit = Invoke-CliProcess (Get-Command $Java).Source @('-cp',$classpath,'com.qualitylogic.x3mf.PackageChecksTest') $run 60
 Copy-Item (Join-Path $run 'stdout.log') (Join-Path $run 'package-checks.log')

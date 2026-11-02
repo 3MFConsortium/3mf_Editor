@@ -19,7 +19,7 @@ Get-Content (Join-Path $run 'stdout.log'),(Join-Path $run 'stderr.log') | Set-Co
 if ($compiled.TimedOut -or $compiled.ExitCode -ne 0) { throw "Compilation failed; see $run/compile.log" }
 Copy-Item -LiteralPath (Join-Path $project 'src/resources') -Destination $classes -Recurse
 $classpath = $classes + [IO.Path]::PathSeparator + (Join-Path $project 'jar/*')
-$helper = Invoke-CliProcess (Get-Command $Javac).Source @('--release','17','-encoding','UTF-8','-cp',$classpath,'-d',$classes,(Join-Path $project 'tests/cli/StructureWarningTest.java')) $run 60
+$helper = Invoke-CliProcess (Get-Command $Javac).Source @('--release','17','-encoding','UTF-8','-cp',$classpath,'-d',$classes,(Join-Path $project 'tests/cli/src/StructureWarningTest.java')) $run 60
 if ($helper.TimedOut -or $helper.ExitCode -ne 0) { throw "Helper compilation failed; see $run/stderr.log" }
 $checks = Invoke-CliProcess (Get-Command $Java).Source @('-Djava.awt.headless=true','-cp',$classpath,'com.qualitylogic.x3mf.StructureWarningTest',$negative,$positive,$errorModel,$schema) $run 60
 Get-Content (Join-Path $run 'stdout.log'),(Join-Path $run 'stderr.log') | Set-Content (Join-Path $run 'report-visibility.log') -Encoding UTF8
