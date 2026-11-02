@@ -1,5 +1,382 @@
 # Issue fixes and CLI regression checks
 
+Issue-specific PowerShell scripts are in `tests/cli/issues/fixes/`.
+The general conformance tools stay in `tests/cli/`, and their self-test remains
+at `tests/cli/issues/Test-Runner.ps1`. Run the commands below from the project
+directory; generated reports still go to `tests/cli/results/`.
+
+## Issue #23: refreshed mismatch report
+
+The historical 37 mismatches were collected before printer/editor selection.
+Printer representation, singular-transform and placement checks address 15 of
+them. Placement now follows authoritative slice contours through slicestack
+references, including units and composed build/component transforms; it ignores
+unused slice vertices, empty contours and superseded fallback meshes.
+Local slicestack IDs are indexed once per model; each object is checked
+independently so an earlier valid reference cannot hide a later missing one.
+
+`Run-Conformance.ps1` now derives acceptance from the consumer policy, retaining
+the original filename-based expectation in `inventory.csv`. In printer mode,
+`P_XPX_0722_04` and `P_EPX_0740_05/06` explicitly expect rejection. The comparison
+revalidates XML and consumer identity, recomputes totals, and distinguishes
+verified acceptance, incomplete coverage and known fixture/specification issues.
+
+`FixtureDiscrepancies.json` documents 22 remaining strict mismatches: nine
+defective fixtures and 13 conflicts between historical tests and current Core
+rules. Classifications require both the exact archive SHA256 and observed result;
+they never waive a failure or alter validator behavior. The fixture defects are
+two sliced tests whose inverted mesh is not authoritative, three missing DTDs,
+two positive Overrides using bare filenames instead of absolute `/2D/` URIs,
+and two crossed slice relationships. The conflicts are eight Unicode-name tests
+and five valid mirrored meshes. Core recommends URI encoding with SHOULD and
+requires mirrors to preserve volume sign; rejecting these to match old names
+would reject content supported by the current format.
+
+Regressions and report refresh:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-Issue23Report.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ReportPolicy.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ValidationConsumer.ps1
+# Reuse the fresh run directory printed by the first command:
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-Issue23FixtureRepairs.ps1 -RunDirectory <run-directory>
+```
+
+The issue report reruns all 37 originals plus six controls, rather than claiming
+a fresh full-suite score. The fixture repair regression creates and validates
+copies of the nine defective archives under that run, with before/after hashes
+and individual repair descriptions. Its two sliced variants make the inverted
+fallback mesh authoritative to test the intended negative-volume condition.
+An additional control verifies that a missing second slicestack reference
+produces `ER_064` after a valid first reference.
+Official fixtures and original expectations remain unchanged. The report still
+lists all unresolved strict mismatches; these need fixture or test-spec changes.
+
+Verified on 2026-11-01: the 43-model refresh has 21 consumer-acceptance matches,
+22 documented strict mismatches and zero unverifiable reports. All 198 profile
+checks, 50 geometry controls, 24 geometry/limit CLI cases, 18 report-policy
+controls and 10 fixture-repair/reference controls pass. The nine corrected
+fixture copies produce four expected acceptances (with warnings) and five
+expected rejections; the additional missing-reference control also rejects.
+
+## Issue #23 consumer selection
+
+`validationConsumer = "printer"` in the working directory's `3MF.ini` selects
+printer validation; missing settings also default to printer. Set `"editor"`
+for editor validation. CLI `--consumer editor|printer` overrides the stored
+setting without persisting it. Invalid settings are reported as startup errors.
+Normal single-file and list XML reports include `consumer="printer|editor"`.
+
+Printer mode reports singular active printable transforms as `ER_201`, base-mesh
+placement outside the positive octant as `ER_202`, and missing accessible,
+supported full-resolution build representations as `ER_203`. Availability follows
+printable build items, component/Boolean dependencies, authoritative slice
+references and eligible alternatives. Unused inaccessible content does not by
+itself cause `ER_203`. Bounded or uninspected content keeps incomplete-validation
+warnings rather than being assumed inaccessible. Editor mode retains warnings
+and permits supported low-resolution or obfuscated alternative fallbacks;
+required unsupported extensions still fail in both profiles.
+
+`Test-ValidationConsumer.ps1` exercises 24 official fixtures in both profiles
+through full, schema-only, structure-only and hidden-warning CLI modes, plus six
+configuration/default/override probes (198 checks). It also runs 41 consumer and
+configuration controls, 37 semantic controls, 19 schema controls and 19
+alternative-eligibility controls. Reports go under `tests/cli/results/`.
+
+`Run-Conformance.ps1 -Consumer Printer` (the default) or `-Consumer Editor`
+records and verifies the requested profile. Consumer-specific expectations and
+original naming-based expectations are recorded separately. Historical counts
+below were collected under editor policy;
+the regressions for consumer-dependent warnings now select editor explicitly.
+
+These profiles do not implement rendering or actual printer-bed limits.
+Schema-only mode omits geometry checks, and final displacement placement remains
+outside the current geometry checks.
+
+## Issue #23 fix: semantic validation and reliable failure results
+
+The CLI now rejects 61 of the original 78 non-rejected negative fixtures for
+their reported defects. This includes required mock extensions, Boolean schema
+errors, empty Override names, duplicate metadata, slice semantics, mandatory
+package relationships, invalid shape references and repeated triangle indices.
+Errors remain Fail in single-file, list, schema-only, structure-only, grouped
+diagnostic and hidden-warning modes as applicable.
+
+`MainFrame` no longer discounts schema errors based on an old namespace prefix
+or leaves structural exceptions as successful results. `ModelSchema` recognizes
+complete supported namespace URIs and rejects unsupported required extensions;
+unsupported optional element subtrees are filtered before schema validation.
+Errors in supported content remain errors even alongside optional extensions.
+`AlternativePolicy` preserves supported fallback behavior: an unsupported model
+part is skipped only when referenced as an alternative, every such use has an
+existing supported full-resolution sibling, and no ordinary model reference
+requires it. Eligibility uses bounded streaming summaries, real resource objects
+and namespace URIs. Such skips report `WR_032`; root and ordinary model required
+extensions still fail. `P_XPX_0722_02` remains accepted in all CLI modes. This
+does not establish rendered alternative selection or printer output.
+
+`ModelRules` checks metadata scopes, slice-local indices, contour closure for
+solid objects, adjacent index distinctness, slice heights, reference abstraction
+and boundaries, build object types, representation meshes, Boolean operands,
+and triangle property resource kinds. It retains compact summaries rather than
+model DOMs, bounds reference storage/traversal and reports incomplete checks.
+It handles namespace aliases, numeric resource-ID spellings and independent
+metadata scopes. Open support contours and coincident coordinates with distinct
+indices remain valid.
+Empty-contour slices, including slices with unused vertex arrays, are ignored as
+required by positive scenario `P_1517`; their heights still participate in stack
+ordering.
+
+Slice checks allow the first slice exactly at zbottom, require subsequent ztop
+values to increase, and use the preceding ztop instead of a later referenced
+stack's zbottom. Missing vertices, out-of-range indices and open solid contours
+are rejected. Required model/slice references must have an internal 3dmodel
+relationship. Relationships parts require their OPC content type; encrypted
+models require an encryptedfile relationship. StartPart must identify a root
+model with a build. Oversized or opaque models keep incomplete-validation
+diagnostics instead of being misdiagnosed as having an invalid root.
+
+Package-root model relationship files and case-insensitive Override part-name
+matching are supported. The former previously hit an unreported indexing
+exception; the latter is needed by the official mixed-case positive controls.
+Schema selection uses the same case-insensitive Override lookup, so alternative
+model suffixes cannot bypass XSD validation through a differently cased path.
+
+### Explicit remaining specification/fixture differences
+
+Seventeen original cases still differ from the historical naming-based
+rejection expectation: five valid mirrored positive meshes; two required-slice
+cases whose low-resolution fallback topology is not authoritative; three DTD
+fixtures without any DOCTYPE; six editor-dependent placement cases; and one
+singular-transform warning. Their observed results are 12 Pass and five Warning.
+No fixture names are special-cased in production validation. Missing DTDs cannot
+be detected as DTD violations, and negative determinant alone does not invalidate
+an otherwise valid mesh under Core's volume-sign preservation rule.
+
+The unmodified conformance runner continues to report these as mismatches. The
+focused regression records each exception in a separate column alongside the
+original specification expectation; it does not present those cases as strict
+specification matches. Unicode-name and inaccessible-encrypted-content warnings
+from #21 are also unchanged. Printer-bed bounds, rendered alternatives and
+printed geometry are outside this editor's validation scope.
+
+Two additional *positive* fixtures (`P_SPX_0915_01` and `P_SPX_1514_02`)
+cross the two model parts' slice relationships: `midway.model` references the
+slice target registered by `midway2.model.rels`, and vice versa. The new required
+relationship check correctly rejects them with `ER_185`. Local repaired copies
+swap the two relationship targets to match each source model and are accepted;
+the official checkout is unchanged. Together with the two malformed `0909_01`
+positive Overrides documented under #21, these need fixture corrections rather
+than weakening payload relationship validation.
+
+### Maintained regressions
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-NegativeAcceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-PositiveAcceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ResultXml.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ToolLimitations.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-LowSeverity.ps1
+```
+
+`Test-NegativeAcceptance.ps1` accepts `-TestSuiteRoot`, compiles fresh sources
+against Java 8 APIs, and runs independent semantic and schema controls alongside
+official-fixture/CLI-mode checks. Positive controls cover
+root-level models, mixed-case content types, initial slice heights and the
+related extension scenarios. Five mode probes require explicit failure codes,
+including grouped Boolean schema errors and structure-only required extensions.
+The two crossed-relationship fixtures retain their original specification
+expectation in the report and are paired with repaired acceptance controls.
+`Test-PositiveAcceptance.ps1` also creates a mixed-case Override on a nonstandard
+model suffix with an invalid object attribute, and requires a schema failure.
+The report regression now requires `ER_198` for `N_EPX_2606_01` rather than allowing
+its former missing-relationship warning. New source/helper/script files are not
+Git-ignored; generated reports remain under ignored `tests/cli/results/`.
+No ignore rules changed.
+
+### Validation on 2026-11-01
+
+| Scope | Result |
+| --- | --- |
+| All 552 negative fixtures | 519 Fail, 12 Pass, 21 Warning; no malformed reports/process errors. Before this fix: 458 Fail, 55 Pass, 39 Warning. |
+| Original issue's 78 non-rejections | 61 now Fail (43 formerly Pass, 18 formerly Warning); 17 explicit fixture/consumer differences remain. |
+| All 1,719 positive fixtures | 1,593 Pass, 122 Warning, four Fail for the two malformed Overrides and two crossed-relationship fixtures above. |
+| Unmodified naming-based acceptance score, all 2,271 models | 2,234 matches, 37 mismatches, zero unverifiable model reports; two missing Appendix C positives are separately recorded as coverage errors. |
+| Focused semantic regression | 208 fixture/mode checks pass; 37 independent semantic, 19 schema and 13 alternative-eligibility controls pass. |
+| Positive acceptance / XML report regressions | All 43 and 47 cases pass, respectively, including single-file filename escaping, six fallback checks and grouped schema diagnostics. |
+| Geometry / limits / package regressions | 44 geometry controls, 24 CLI limit cases, 22 package/XML controls and 30 available package cases pass. The known missing historical `N_DPX_3314_09` and `N_XPM_0208_03` remain unavailable. |
+
+The 33 remaining negative naming-based mismatches comprise the 17 original
+differences above, eight Unicode interoperability warnings and eight inaccessible
+encrypted-content warnings from #21. They remain visible in the full score.
+The missing Appendix C positives are `P_3006_01` (suite 10) and `P_3212_04`
+(suite 11). All 41 additional discovered models are included, without changing
+the specification mapping. No fixture or external schema was edited.
+
+Combined evidence is in `tests/cli/results/issue23-combined-20261101/`:
+`summary.json`, `results.csv`, `junit.xml`, `negative-before-after.csv`,
+`source-sha256.csv` and `specification-match/`. All 2,271 individual XML reports
+and 103 aggregate XML reports parse. No non-Fail report contains a critical,
+`ER_` or `SC_` issue, and no model uses an `ER_REPORT_XML` fallback report.
+
+The full scope was split across existing runner jobs, using the completed suite
+1 results from `issue23-verification/20261101-142746-7049c205`, suites 2/4/7/10
+from `issue23-verification-a/20261101-143409-aebe81ca`, and suites 3/5/6/8/9/11
+from `issue23-verification-b/20261101-143422-852cbb51`. The latter two jobs completed
+normally; the first was stopped after all 291 suite-1 cases when splitting the
+remaining scope. Duplicate/missing coverage was checked before merging. Schema
+hashes agree across the completed jobs and the current external checkout.
+
+The bulk run identified the late empty-contour, Override lookup and optional
+alternative corrections. All 30 affected official fixtures were rerun with final
+sources in `issue23-final-refresh-20261101-150106`; these final reports replace
+their bulk rows in the combined score. Source-run paths and that refresh are
+recorded in the combined metadata. The earlier interrupted development runs
+`issue23-fixed/20261101-141957-02fffc40` and
+`issue23-final/20261101-142523-83a0fe73` are not used in the combined evidence.
+
+Maintained-regression evidence:
+
+- `negative-acceptance-20261101-145906-ffbb2c95`.
+- `positive-acceptance-20261101-145627-255083a4`.
+- `result-xml-20261101-150023-17ac5ccd`.
+- `tool-limitations-20261101-142848-37ffe75d`.
+- `low-severity-20261101-142955`.
+
+Fresh production sources compile against Java 8 APIs with Zulu OpenJDK 21.0.3;
+the independent geometry helper uses Java 17 APIs. Initial sandbox compilation
+hit OneDrive path-resolution/cleanup errors; clean compilation and the affected
+regressions succeeded outside the sandbox. `git diff --check` and PowerShell
+syntax checks pass. No interactive GUI, rendering or printing test was performed.
+
+## Issue #23 original investigation before the fix
+
+[Issue #23](https://github.com/3MFConsortium/3mf_Editor/issues/23) was checked
+live on 2026-11-01: open, no comments. This investigation changes no production
+code, fixture, schema, warning policy, or acceptance expectation.
+
+Fresh sources at `39f3d6e3f225c72fe6cca9106203d804fbd25016` were compiled and
+all 552 negative fixtures were run with Zulu OpenJDK 21.0.3, schema and structure
+checks, `-I`, and suite-aware UUID settings (required in suites 1, 2, 5).
+Fixture commit: `a63f4bf07c4ab287c8f84f1cdeab8ee92333a577`.
+Specification v2.4.1 SHA256:
+`614D900FD123C6331FDCFA32C88D3F56590A9F393DC0801D3FD95FA2CEDC9752`.
+
+| Population | Fail | Pass | Warning | Invalid/unverifiable report |
+| --- | ---: | ---: | ---: | ---: |
+| Original issue run, all 552 | 444 | 55 | 23 | 30 |
+| Current run, all 552 | 458 | 55 | 39 | 0 |
+| Original 78 non-rejections, rerun now | 0 | 55 | 23 | 0 |
+| Original 30 malformed reports, rerun now | 22 | 0 | 8 | 0 |
+
+Every original 78-case result is unchanged, not merely the totals. The current
+94 naming-based mismatches comprise those 78, eight formerly malformed encrypted
+content cases (`2602` and `2604`) now reporting `WR_031`, and eight Unicode-name
+cases (`0208`) changed from Fail to `WR_030` by #21. These are recorded without
+waiving the runner's negative-case expectation. Four `2604` cases have an explicit
+editor exception in the test specification. No missing negative Appendix C
+entries were found; 26 discovered models are additional to that mapping.
+
+### Findings for the original 78 cases
+
+Counts below refer to that original population. Several rows require fixture or
+consumer interpretation; the total is not a count of independent validator bugs.
+
+| Scenario | Cases | Current result | Investigation |
+| --- | ---: | --- | --- |
+| `0207_01`, empty Override PartName | 6 | Pass | Confirmed defect. `FileStructureCheck.java:794` calls `pn.charAt(0)` on the empty string. `MainFrame.chk3MfStructure` catches the exception and only prints its stack trace, skipping `reportStructureResult`; no structured failure reaches the CLI. |
+| `0428_01`, required mock extension | 6 | Pass with critical `SC_000` | Confirmed defect. Unknown required namespaces are not rejected, and the schema suppression below permits the resulting schema error. |
+| `3102_01`, multiple Boolean shapes | 1 | Pass with critical `SC_000` | Confirmed defect. The Boolean namespace uses `schemas.3mf.io`, which the schema suppression treats as ignorable. |
+| `0410_03/_04`, duplicate metadata | 8 | Pass | No metadata-name uniqueness check is implemented in the structural validator. The packages repeat reserved metadata names. Core's metadata rules prohibit duplicate names. |
+| `0412_02/_03/_04`, slice indices | 6 | Pass | Missing slice-local vertex bounds and missing-vertices checks. Existing mesh index checks do not cover polygon `startv` and segment `v2`. |
+| `1605`-`1609`, `1612`, slice semantics | 14 | Pass | Slice references are checked for existence, but not nested abstraction, height ordering, repeated adjacent indices, polygon shape/closure, or ordering across referenced stacks. |
+| `0204_01`, `0405_03`, relationship types | 3 | Warning, `WR_022` | The unknown type is diagnosed without establishing whether the required model/slice relationship still exists. Preserve unrelated custom relationships; validate the required relationship for each payload reference. |
+| `0402_03`, invalid StartPart | 2 | Warning | Existence/orphan checks do not establish that the start part is an appropriate root model. |
+| `0404_03`, relationship content type | 6 | Warning, `WR_019` | An invalid type on the required relationships part receives only the general unknown-content-type warning. Distinguish required OPC parts from arbitrary custom parts. |
+| `2505_03`, representation mesh | 1 | Warning, `WR_010` | Referenced object 4 contains a beam lattice. Existing representationmesh checks cover ID/self-reference/type, but omit the prohibition on a representation mesh containing a beam lattice. |
+| `2606_01`, encrypted relationship | 1 | Warning, `WR_019` | Missing encrypted-file relationship remains undiagnosed as an error; this is separate from inaccessible content keys and the keystore root relationship fixed in #21. |
+| `3100_07`, Boolean build object | 1 | Pass | The build references Boolean object 3 with `type="other"`. Core prohibits build items from referencing this type. This fixture is additional to Appendix C and has no iteration-07 definition in the scenario text. |
+| `3104_05_beamlattice`, Boolean operand | 1 | Warning, `WR_029` | The operand contains a beam lattice, forbidden for a Boolean operand. Existing checks inspect components, Boolean shapes and displacement nodes, but omit nested beam content. The geometry-budget warning does not validate operand eligibility. |
+| `3310_17_material`, displacement triangle | 1 | Pass | Triangle `pid="6"` resolves to a `disp2dgroup`, rather than a material property group. Resource existence/index checks do not enforce the required resource kind. |
+| `0416_02/_03`, volume/transform | 6 | Pass | Four `_02` cases are positive meshes mirrored by transforms. Two `_03` cases use required slices with low-resolution fallback meshes; `GeometryCheck.topology` intentionally skips those meshes. This does not establish a general missing negative-volume check. |
+| `3314_03/_07`, displacement transforms | 2 | Pass / Warning, `WR_027` | `_03` mirrors a positive base mesh; negative determinant alone is not a negative-volume error. `_07` receives the existing singular-transform warning. Keep these policies separate from inverted base mesh rejection. |
+| `0420_01`, DTD | 3 | Pass | Fixture defect: `N_XXX`, `N_XPX`, and `N_XXM` contain no DOCTYPE in any XML/model/relationship part. The other three `0420_01` fixtures contain DOCTYPE and all return Fail. No missing DTD rejection is reproduced. |
+| `0421_01`, placement | 6 | 2 Pass / 4 Warning | Four receive `WR_028`; two required-slice cases skip fallback-mesh placement. The CLI has no printer-bed bounds, and Core's positive-octant rule is SHOULD. Validate slice placement before claiming these are all printer-position failures. |
+| `0411_01`, `0427_01`, repeated indices | 4 | Warning, `WR_014` | The test text hedges deep parsing/permits ignored non-manifold content. Core nevertheless requires distinct triangle indices; a strict validator could reject this independently of non-manifold/degenerate-area policy. |
+
+### Causes and recommended fix order
+
+1. **Result integrity and extension support.** In both `MainFrame.xmlValid`
+   and `xmlValidCon` (around lines 3321-3374 and 3485-3547), an error is discounted
+   when the Xerces message identifies an element outside the old Microsoft
+   namespace prefix. If every error is discounted, the method returns true even
+   though `xmlValidCon` has emitted critical `SC_000` issues. Both detailed and
+   grouped error paths have this behavior. Establish supported namespace URIs,
+   reject unsupported *required* extensions, and make real schema errors drive
+   Fail. Preserve the Core rules for ignorable optional extension content.
+   Also convert unexpected structural-check exceptions into a structured failure,
+   and validate empty strings before indexing them.
+2. **Slice semantics and metadata.** Add checks within each metadata scope and
+   each slice, then follow slice references with bounded traversal. Validate
+   vertex ranges, minimum polygon descriptions, closure for solid object types,
+   adjacent index distinctness, a single reference layer, and increasing heights
+   across stacks. Do not blanket-reject a zbottom mismatch: Slice requires using
+   the previous ztop at a reference boundary, while subsequent ztop must increase.
+3. **Required package parts and typed references.** Validate start-part role,
+   mandatory relationship/content types and encrypted-file relationships. Check
+   representation-mesh content, Boolean operand content/build eligibility and
+   displacement material resource kinds independently of geometry budgets.
+4. **Keep consumer and fixture questions explicit.** Repair the three absent-DTD
+   fixtures upstream; preserve valid mirror behavior; decide placement,
+   singular-transform and repeated-index reporting from their individual rules.
+   Promoting every `WR_` warning would also reject legitimate custom parts and
+   inaccessible content that an editor is permitted to ignore.
+
+These interpretations were checked against the local official specification
+checkouts: [Core, matrices/metadata/model/build/triangle rules](https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md),
+[Slice, reference and polygon rules](https://github.com/3MFConsortium/spec_slice/blob/master/3MF%20Slice%20Extension.md),
+[Beam Lattice, representationmesh](https://github.com/3MFConsortium/spec_beamlattice/blob/master/3MF%20Beam%20Lattice%20Extension.md),
+and [Boolean Operations, operand rules](https://github.com/3MFConsortium/spec_booleans/blob/master/3MF%20Boolean%20operations.md).
+They are distinct from the historical v2.4.1 naming-based acceptance score.
+
+### Reproduction and evidence
+
+From the project directory, using the issue's batch configuration:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Run-Conformance.ps1 -Polarity Negative -BatchSize 25 -TimeoutSeconds 1200 -OutputRoot tests/cli/results/issue23-negative-batched
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Compare-Specification.ps1 -RunDirectory <new-run-folder>
+```
+
+The complete new run is
+`tests/cli/results/issue23-negative-batched/20261101-135734-07f3a9b2`.
+Its `summary.json` has `Completed: true`; `results.csv` and `junit.xml` agree on
+552 cases, 458 expected rejections, 94 acceptance mismatches and zero report or
+process errors. Runner exit 1 is expected for the reproduced mismatches.
+All original XML and HTML reports and process logs are retained.
+
+`baseline-comparison.csv` joins all 552 models to the issue's saved original run
+(`tests/cli/results/negative/20261031-235949-3342b33d`);
+`original78-current.csv` and `original30-current.csv` preserve the two issue
+populations. `dtd-fixture-inspection.csv` records which of the six DTD fixtures
+actually contain a DOCTYPE. The specification comparison is under
+`specification-match/`.
+
+Six additional single-file probes use the same newly compiled classes and a
+2 GiB heap: empty `N_XPM_0207_01`, schema-only `N_XPM_0428_01`, and schema-only
+`N_OPX_3102_01` all reproduce Pass instead of Fail; `P_XXX_0101_01`,
+`P_XPM_0101_01`, and `P_SPX_0101_01` all return Pass with UUID checking enabled.
+Every probe exits normally without timeout; see `mode-probes.csv` and its logs.
+This confirms the three defects are also observable outside batch execution.
+
+An earlier single-model-per-process run was intentionally interrupted after
+21 completed models when switching to the issue's batch reproduction. Its
+`issue23-negative/20261101-135623-a730e53f` directory is incomplete and is not
+used for the completed totals above. Generated evidence is Git-ignored under
+`tests/cli/results/`; this README is tracked. No ignore rules changed. This is
+CLI schema/structure investigation only; no GUI, rendering or printing run was
+performed.
+
 ## Issue #21 fix: positive fixture acceptance
 
 The editor now accepts the reported PNG thumbnail Overrides and unsupported
@@ -57,11 +434,11 @@ remain outside this repository's fix.
 Run the maintained regressions from the project directory:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-PositiveAcceptance.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ResultXml.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-LowSeverity.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-AlternativeReferences.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1 -Headless
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-PositiveAcceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ResultXml.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-LowSeverity.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-AlternativeReferences.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-SecureContent.ps1 -Headless
 ```
 
 `Test-PositiveAcceptance.ps1` now asserts the resulting policy rather than treating
@@ -172,7 +549,7 @@ does not establish rendering behavior or that all decryption keys are absent.
 Run from the project directory:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-PositiveAcceptance.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-PositiveAcceptance.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/Run-Conformance.ps1 -Polarity Positive -InventoryOnly -OutputRoot tests/cli/results/issue21-inventory
 ```
 
@@ -214,7 +591,7 @@ Aggregate fallback output retains the `TestResults` wrapper.
 Run from the project directory with a JDK and the official fixture checkout:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ResultXml.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ResultXml.ps1
 ```
 
 The script supports `-TestSuiteRoot`, compiles fresh sources and a fallback helper
@@ -236,8 +613,8 @@ This fixes report serialization, not other fixture acceptance policies:
 geometry rules are changed. This targeted run does not establish full-suite
 conformance or interactive GUI correctness.
 
-Keep issue-fix documentation in this file and all `Test-*.ps1` regression scripts
-in `tests/cli/issues/`. Commands below run from the `3MF` project directory. Shared CLI
+Keep issue-fix documentation in this file and issue-specific PowerShell scripts
+in `tests/cli/issues/fixes/`. Commands below run from the `3MF` project directory. Shared CLI
 utilities remain in `tests/cli/`, alongside the ignored generated reports.
 Java test helper sources live in `tests/src/` and `tests/cli/` and are compiled explicitly by the
 regression scripts.
@@ -276,7 +653,7 @@ placement remains a warning rather than a hard format error.
 Targeted reproduction from the `3MF` directory:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-NegativePlacement.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-NegativePlacement.ps1
 ```
 
 This compiles production code against Java 8 APIs, uses the actual official
@@ -316,7 +693,7 @@ signature check does not establish that the entire image decodes correctly.
 Run from the `3MF` project directory (JDK 17+, official fixture checkout):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ToolLimitations.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ToolLimitations.ps1
 ```
 
 The script accepts `-TestSuiteRoot PATH`, `-HeapMB` (default 2048) and
@@ -511,7 +888,7 @@ the link was found and contains no additional reproduction details.
 The website maintainer should replace that anchor's destination with the
 [v1.0.0 release PDF](https://github.com/3MFConsortium/3mf_Editor/releases/download/v1.0.0/3MF_Editor_Guide_v1_00.pdf).
 An HTTP HEAD request followed redirects and returned 200 on 2026-10-30. The
-repository also provides the [Markdown guide](../../../Documentation/3MF_Editor_Guide_v1_00.md).
+repository also provides the [Markdown guide](../../../Documentation/3MF_Editor_Guide.md).
 No occurrence of the personal URL was found in current repository text sources,
 the public README, or the release description. The affected website content is
 outside this checkout; this investigation changes no production code and does
@@ -552,7 +929,7 @@ CLI mode ignores the GUI preference and retains the original report colors.
 Run from the `3MF` directory (JDK 17+):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-DarkMode.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-DarkMode.ps1
 ```
 
 This compiles current sources and tests real editor components in headless mode:
@@ -642,7 +1019,7 @@ To check archive extraction and natural filename ordering without a desktop sess
 or the official fixtures, run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ZipFileUtil.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ZipFileUtil.ps1
 ```
 
 This compiles the archive utility and runs filesystem regressions for all three
@@ -654,7 +1031,7 @@ Generated fixtures and logs are retained under `tests/cli/results/zip-utils-*`.
 To verify alternative object references (issue #3), run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-AlternativeReferences.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-AlternativeReferences.ps1
 ```
 
 This compiles the current sources and checks all 11 official `P_XPX_0720` fixtures,
@@ -666,7 +1043,7 @@ Reports are saved under `tests/cli/results/alternative-references-*`.
 To verify beam minimum-length handling, run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-BeamMinlength.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-BeamMinlength.ps1
 ```
 
 This checks positive and negative beam fixtures and existing cross-extension
@@ -675,7 +1052,7 @@ cases. Reports are saved under `tests/cli/results/beam-minlength-*`.
 To verify slice-only transform restrictions (issue #4), run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-Transforms.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-Transforms.ps1
 ```
 
 This checks all 11 official `P_XPX_0720` fixtures and generated item/component
@@ -690,7 +1067,7 @@ under `tests/cli/results/transforms-*`.
 To verify duplicate content-type overrides (issue #6), run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ContentTypeOverrides.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ContentTypeOverrides.ps1
 ```
 
 Overrides now report `ER_108` when a PartName has already appeared, using the
@@ -746,7 +1123,7 @@ without beam lattices are unaffected by this rule.
 Run from the `3MF` project directory (JDK 17+ required):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-BeamObjectTypes.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-BeamObjectTypes.ps1
 ```
 
 The script compiles current sources and checks the official reported fixture,
@@ -758,7 +1135,7 @@ primary-issue selection. Use `-TestSuiteRoot PATH` to override the default
 `tests/cli/results/beam-object-types-*`.
 
 Validation: all seven object-type cases pass, as do all twelve existing cases
-in `tests/cli/issues/Test-BeamMinlength.ps1`.
+in `tests/cli/issues/fixes/Test-BeamMinlength.ps1`.
 
 ## Issue #8: Secure Content decryption in CLI validation
 
@@ -776,7 +1153,7 @@ are unchanged.
 Run from the `3MF` project directory (JDK 17+ required):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-SecureContent.ps1
 ```
 
 Use `-TestSuiteRoot PATH` to override the default official fixture checkout beside
@@ -816,7 +1193,7 @@ The editor retains its window, menus, layout, saved geometry and close behavior.
 Run from the `3MF` project directory (JDK 17+ and official fixtures required):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-SecureContent.ps1 -Headless
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-SecureContent.ps1 -Headless
 ```
 
 This extends the existing Secure Content regressions with unencrypted positive
@@ -857,7 +1234,7 @@ spaces do not produce this warning.
 Run from the `3MF` project directory (JDK 17+ and official fixtures required):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ReferenceWhitespace.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ReferenceWhitespace.ps1
 ```
 
 Use `-TestSuiteRoot PATH` to override the default official fixture checkout.
@@ -932,7 +1309,7 @@ so it cannot rescue the blocked initial load.
 Reproduce from the `3MF` project directory (JDK 17+; no official fixtures needed):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-LongXmlLines.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-LongXmlLines.ps1
 ```
 
 The script compiles only the four editor component classes and
@@ -984,7 +1361,7 @@ No reference-validation checks are bypassed.
 Reproduce from the `3MF` project directory:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-ResourceOrdering.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-ResourceOrdering.ps1
 ```
 
 The script accepts `-TestSuiteRoot PATH`, compiles fresh editor sources, and
@@ -1029,7 +1406,7 @@ The independent .NET schema check maps W3C `xml.xsd` imports to the same local
 declarations when the W3C URL is reachable and avoids network-dependent schema
 loading. It changes neither the source schemas nor production validation.
 The script also runs from `tests/cli` with
-`powershell -NoProfile -ExecutionPolicy Bypass -File .\issues\Test-ResourceOrdering.ps1`.
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\issues\fixes\Test-ResourceOrdering.ps1`.
 
 ## Issue #9 fix: package names, markup, relationships, images and materials
 
@@ -1135,7 +1512,7 @@ without DTDs, and correctly ordered multiproperties as positive controls.
 Reproduce from the project directory (JDK 17+ and official fixture checkout):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-LowSeverity.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-LowSeverity.ps1
 ```
 
 The script accepts `-TestSuiteRoot PATH`, compiles fresh sources, isolates each

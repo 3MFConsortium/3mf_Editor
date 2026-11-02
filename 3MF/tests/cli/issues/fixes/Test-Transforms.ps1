@@ -5,13 +5,13 @@ param(
     [string]$Javac = 'javac'
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../test_suites' }
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../../test_suites' }
 
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $fixtures = (Resolve-Path -LiteralPath $TestSuiteRoot).Path
 $schema = Join-Path $fixtures 'Consolidated_Schema/Schema'
-$run = Join-Path $PSScriptRoot ('../results/alternative-references-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$run = Join-Path $PSScriptRoot ('../../results/transforms-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
 $sources = @(Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java' | ForEach-Object { '"' + $_.FullName.Replace('\', '/') + '"' })
@@ -27,50 +27,73 @@ $positive = Join-Path $fixtures 'suite5_core_prod/positive_test_cases_prod_alt'
 $generated = Join-Path $run 'fixtures'
 [void](New-Item -ItemType Directory -Path $generated)
 
-# Derive focused negative cases from a valid fixture without modifying the checkout.
-function New-AlternativeCase([string]$Name, [scriptblock]$Edit) {
+# Exercise both item and component transforms with and without slice references.
+function New-TransformCase([string]$Name, [bool]$Slices, [string]$NodeName, [string]$Transform, [bool]$OtherError = $false) {
     $target = Join-Path $generated ($Name + '.3mf')
-    Copy-Item (Join-Path $positive 'P_XPX_0720_01.3mf') $target
+    Copy-Item (Join-Path $fixtures 'suite4_core_slice/positive_test_cases/P_SXX_1511_01.3mf') $target
     $zip = [IO.Compression.ZipFile]::Open($target, [IO.Compression.ZipArchiveMode]::Update)
     try {
         $entry = $zip.GetEntry('3D/3dmodel.model')
         $reader = [IO.StreamReader]::new($entry.Open())
         try { $doc = Read-SafeXml ($reader.ReadToEnd()) } finally { $reader.Dispose() }
-        & $Edit $doc
+        $obj = $doc.SelectSingleNode('//*[local-name()="object"]')
+        if (-not $Slices) {
+            $obj.RemoveAttribute('slicestackid', 'http://schemas.microsoft.com/3dmanufacturing/slice/2015/07')
+            $obj.RemoveAttribute('meshresolution', 'http://schemas.microsoft.com/3dmanufacturing/slice/2015/07')
+            foreach ($stack in @($doc.SelectNodes('//*[local-name()="slicestack"]'))) {
+                [void]$stack.ParentNode.RemoveChild($stack)
+            }
+        }
+        $item = $doc.SelectSingleNode('//*[local-name()="item"]')
+        if ($NodeName -eq 'component') {
+            $ns = $doc.DocumentElement.NamespaceURI
+            $wrapper = $doc.CreateElement('object', $ns)
+            $wrapper.SetAttribute('id', '999')
+            $components = $doc.CreateElement('components', $ns)
+            $node = $doc.CreateElement('component', $ns)
+            $node.SetAttribute('objectid', $obj.GetAttribute('id'))
+            [void]$components.AppendChild($node)
+            [void]$wrapper.AppendChild($components)
+            [void]$obj.ParentNode.AppendChild($wrapper)
+            $item.SetAttribute('objectid', '999')
+            $item.RemoveAttribute('transform')
+        } else { $node = $item }
+        # The consolidated schema requires Production UUIDs even on older slice fixtures.
+        foreach ($element in $doc.SelectNodes('//*[local-name()="object" or local-name()="item" or local-name()="build" or local-name()="component"]')) {
+            $attr = $doc.CreateAttribute('p', 'UUID', 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06')
+            $attr.Value = [guid]::NewGuid().ToString()
+            [void]$element.Attributes.Append($attr)
+        }
+        if ($OtherError) {
+            $doc.SelectSingleNode('//*[local-name()="build"]').RemoveAttribute('UUID', 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06')
+        }
+        $node.SetAttribute('transform', $Transform)
         $entry.Delete()
         $writer = [IO.StreamWriter]::new($zip.CreateEntry('3D/3dmodel.model').Open(), [Text.UTF8Encoding]::new($false))
         try { $writer.Write($doc.OuterXml) } finally { $writer.Dispose() }
     } finally { $zip.Dispose() }
     return $target
 }
-$forward = New-AlternativeCase 'forward-reference' {
-    param($doc)
-    $resources = $doc.SelectSingleNode('//*[local-name()="resources"]')
-    [void]$resources.AppendChild($resources.FirstChild)
-}
-$missing = New-AlternativeCase 'missing-object' {
-    param($doc)
-    $doc.SelectSingleNode('//*[local-name()="alternative"]').SetAttribute('objectid', '999')
-}
-$wrongPart = New-AlternativeCase 'wrong-model' {
-    param($doc)
-    # Object 2 exists locally, but must not satisfy a reference to another model.
-    $doc.SelectSingleNode('//*[local-name()="alternative"]').SetAttribute('path', '/3D/missing.model')
-}
-$nested = New-AlternativeCase 'nested-alternatives' {
-    param($doc)
-    $objects = $doc.SelectNodes('//*[local-name()="object"]')
-    $alternatives = $objects[1].SelectSingleNode('*[local-name()="alternatives"]')
-    [void]$objects[0].AppendChild($alternatives.CloneNode($true))
-}
 $cases = @(
     foreach ($iteration in 1..11) {
-        @{ Model = (Join-Path $positive ('P_XPX_0720_{0:d2}.3mf' -f $iteration)); Expected = 'Accept'; Code = '' }
+        @{ Model = (Join-Path $positive ('P_XPX_0720_{0:d2}.3mf' -f $iteration)); Expected = 'Accept'; Code = ''; NoSlices = $true }
     }
-    @{ Model = $forward; Expected = 'Fail'; Code = 'ER_141' }
-    @{ Model = $missing; Expected = 'Fail'; Code = 'ER_057' }
-    @{ Model = $wrongPart; Expected = 'Fail'; Code = 'ER_057' }
-    @{ Model = $nested; Expected = 'Fail'; Code = 'ER_140' }
+    foreach ($node in @('item', 'component')) {
+        foreach ($slices in @($false, $true)) {
+            foreach ($matrix in @(
+                @{ Name = 'identity'; Value = '1 0 0 0 1 0 0 0 1 25 25 25'; Code = '' },
+                @{ Name = 'scale'; Value = '0.5 0 0 0 0.5 0 0 0 0.5 25 25 25'; Code = 'ER_075' },
+                @{ Name = 'rotate-x'; Value = '1 0 0 0 0 1 0 -1 0 25 25 25'; Code = 'ER_072' }
+            )) {
+                $code = if ($slices) { $matrix.Code } else { '' }
+                $model = New-TransformCase "$node-slices-$slices-$($matrix.Name)" $slices $node $matrix.Value
+                @{ Model = $model; Expected = $(if ($code) { 'Fail' } else { 'Accept' }); Code = $code; NoSlices = (-not $slices) }
+            }
+        }
+        # An unrelated error used to expose the spurious XML transform diagnostics.
+        $model = New-TransformCase "$node-no-slices-unrelated-error" $false $node '0.5 0 0 0 0.5 0 0 0 0.5 25 25 25' $true
+        @{ Model = $model; Expected = 'Fail'; Code = 'ER_039'; NoSlices = $true }
+    }
 )
 $results = foreach ($case in $cases) {
     $model = (Resolve-Path -LiteralPath $case.Model).Path
@@ -93,12 +116,12 @@ $results = foreach ($case in $cases) {
         $doc = Read-SafeXml ([IO.File]::ReadAllText($report))
         $issues = @($doc.DocumentElement.SelectNodes('./Issue | ./PrimaryIssue'))
         if ($case.Code -and @($issues | Where-Object { $_.GetAttribute('issueID') -eq $case.Code }).Count -eq 0) { $problems.Add("Missing $($case.Code)") }
-        if ($case.Expected -eq 'Accept') {
+        if ($case.NoSlices -or $case.Expected -eq 'Accept') {
             $html = [IO.File]::ReadAllText([IO.Path]::ChangeExtension($report, '.html'))
-            if ($html -match 'ER_141' -or @($issues | Where-Object { $_.GetAttribute('issueID') -eq 'ER_141' }).Count) { $problems.Add('Spurious alternative forward reference') }
+            if ($html -match 'ER_07[1-6]' -or @($issues | Where-Object { $_.GetAttribute('issueID') -match '^ER_07[1-6]$' }).Count) { $problems.Add('Spurious slice transform diagnostic') }
         }
     }
-    [pscustomobject]@{ Suite = 'issue3'; Name = $name; Expected = $case.Expected; Actual = $checked.Actual; Status = $(if ($problems.Count) { 'Failed' } else { 'Passed' }); Detail = ($problems -join '; '); Report = $report }
+    [pscustomobject]@{ Suite = 'issue4'; Name = $name; Expected = $case.Expected; Actual = $checked.Actual; Status = $(if ($problems.Count) { 'Failed' } else { 'Passed' }); Detail = ($problems -join '; '); Report = $report }
 }
 $results | Export-Csv (Join-Path $run 'results.csv') -NoTypeInformation -Encoding UTF8
 Write-JUnitReport $results (Join-Path $run 'junit.xml')

@@ -11,7 +11,7 @@ public final class ModelSchemaTest {
     private static int count;
     private static void check(File schema, String xml, boolean packageProduction, String error) throws Exception {
         try {
-            ModelSchema.load(schema, xml, packageProduction).newValidator().validate(SafeXml.source(xml));
+            ModelSchema.load(schema, xml, packageProduction).newValidator().validate(ModelSchema.validationSource(xml));
             if (error != null) throw new AssertionError("Expected schema rejection: " + error);
         } catch (SAXException ex) {
             if (error == null || !ex.getMessage().contains(error)) throw ex;
@@ -46,6 +46,17 @@ public final class ModelSchemaTest {
         check(schema, core, false, null);
         String dtd = core.replaceFirst("<model\\b", "<!DOCTYPE model []><model");
         check(schema, dtd, false, "DOCTYPE");
+        String optional = core.replaceFirst("<resources>", "<resources><x:future xmlns:x='urn:future'><x:child/></x:future>");
+        check(schema, optional, false, null);
+        check(schema, optional.replaceFirst("<object\\b", "<object unknown='bad'"), false, "unknown");
+        check(schema, core.replaceFirst("requiredextensions=\"[^\"]*\"", "requiredextensions='x'")
+            .replaceFirst("<model\\b", "<model xmlns:x='urn:future'"), false, "Unsupported required extension");
+        check(schema, core.replaceFirst("requiredextensions=\"[^\"]*\"", "requiredextensions='undeclared'"), false, "Unsupported required extension");
+        String bo = "http://schemas.3mf.io/3dmanufacturing/booleanoperations/2023/07";
+        String shape = "<bo:booleanshape xmlns:bo='" + bo + "' objectid='2' operation='union'><bo:boolean objectid='2'/></bo:booleanshape>";
+        String boModel = core.replaceFirst("(?s)<mesh>.*?</mesh>", shape);
+        check(schema, boModel, false, null);
+        check(schema, core.replaceFirst("(?s)<mesh>.*?</mesh>", shape + shape), false, "booleanshape");
         System.out.println("Passed " + count + " model-schema checks");
     }
 }

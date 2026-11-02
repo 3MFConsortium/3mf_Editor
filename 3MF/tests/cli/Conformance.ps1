@@ -83,6 +83,23 @@ function Get-ModelCases([string]$Root, [int[]]$Suites, [string]$Polarities = 'Al
     }
 }
 
+function Get-ConsumerExpectation([string]$SpecKey, [string]$Consumer) {
+    if ($Consumer -notin @('printer','editor')) { throw "Unknown validation consumer: $Consumer" }
+    if ($SpecKey -notmatch '^\d+/([PN])_(\d{4})_(\d{2})$') { throw "Invalid specification key: $SpecKey" }
+    $polarity=$Matches[1]; $scenario=$Matches[2]; $iteration=$Matches[3]
+    $naming=if($polarity -eq 'P'){'Accept'}else{'Reject'}
+    $expected=$naming; $basis='Section 5.1 positive/negative acceptance convention'
+    if($Consumer -eq 'printer' -and $polarity -eq 'P' -and
+        (($scenario -eq '0722' -and $iteration -eq '04') -or ($scenario -eq '0740' -and $iteration -in @('05','06')))) {
+        $expected='Reject'; $basis='Scenario iteration explicitly requires a printer exception'
+    }
+    if($Consumer -eq 'editor' -and $polarity -eq 'N' -and
+        ($scenario -in @('0208','0421','2602','2604') -or ($scenario -eq '3314' -and $iteration -eq '07'))) {
+        $expected='Accept'; $basis='Editor policy permits incomplete content and placement/interoperability warnings; printer rejection criteria are tracked separately'
+    }
+    [pscustomobject]@{Expected=$expected;NamingExpected=$naming;Basis=$basis}
+}
+
 function Test-CliResult([string]$Path, [string]$Name, [string]$Expected, [bool]$StrictWarnings = $false) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return [pscustomobject]@{ Status = 'Error'; Actual = ''; Detail = 'CLI did not write a result' }
@@ -96,6 +113,9 @@ function Test-CliResult([string]$Path, [string]$Name, [string]$Expected, [bool]$
         $actual = $root.GetAttribute('result')
         if ($actual -cnotin @('Pass', 'Warning', 'Fail')) { throw "Unknown result: $actual" }
         $issues = @($root.SelectNodes('./Issue | ./PrimaryIssue') | ForEach-Object { $_.OuterXml }) -join "`n"
+        if($actual -ne 'Fail' -and @($root.SelectNodes('./Issue | ./PrimaryIssue')|Where-Object {
+            $_.GetAttribute('issueID') -match '^(ER_|SC_)' -or $_.GetAttribute('severity') -eq 'critical'
+        }).Count){throw 'Non-Fail report contains an error diagnostic'}
         if ($actual -eq 'Fail' -and [string]::IsNullOrWhiteSpace($issues)) {
             throw 'Fail result has no diagnostic issue; cannot verify rejection'
         }

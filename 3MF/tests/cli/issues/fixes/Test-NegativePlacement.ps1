@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param([string]$TestSuiteRoot, [string]$Java = 'java', [string]$Javac = 'javac')
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../test_suites' }
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../../test_suites' }
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $fixtures = (Resolve-Path -LiteralPath $TestSuiteRoot).Path
 $schema = Join-Path $fixtures 'Consolidated_Schema/Schema'
 $negative = Join-Path $fixtures 'suite2_core_prod_matl/negative_test_cases/N_XPM_0421_01.3mf'
@@ -36,6 +36,7 @@ $results = foreach ($case in $cases) {
     $work = Join-Path $run $case.Name
     [void](New-Item -ItemType Directory -Path $work)
     @('bdoWarn = "true"','pNoUUIDchk = "false"') | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+    'validationConsumer = "editor"' | Add-Content (Join-Path $work '3MF.ini') -Encoding ASCII
     @(('pschemaLoc = "' + $schema.Replace('\','/') + '"'),'iErrMaxStructure = "100"','iErrMaxValidataion = "100"') | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
     $arguments = @('-cp',$classpath,'com.qualitylogic.x3mf.StartUp','-C','-I')
     if ($case.List) {

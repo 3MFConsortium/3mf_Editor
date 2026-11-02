@@ -27,6 +27,7 @@ public class StartUp {
 	public static Boolean bnoOverwrite = false;
 	public static String oneFile = "";
 	public static String fileList = "";
+	public static ValidationConsumer consumerOverride;
 
 	public static void main(String[] args) {
 
@@ -42,6 +43,8 @@ public class StartUp {
 		Option runIfFailOption = new Option("I", "ifFail", false, "run structural even if validation fails");
 		Option noWarnOption = new Option("W", "hideWarn", false, "do not display warnings");
 		Option noOverwriteOption = new Option("O", "noOverwrite", false, "do not overwrite results, use versioning");
+		Option consumerOption = Option.builder().longOpt("consumer").hasArg().argName("editor|printer")
+				.desc("validation consumer (overrides 3MF.ini; default printer)").build();
 
 		options.addOption(runCliOption);
 		options.addOption(oneFileOption);
@@ -51,11 +54,13 @@ public class StartUp {
 		options.addOption(runIfFailOption);
 		options.addOption(noWarnOption);
 		options.addOption(noOverwriteOption);
+		options.addOption(consumerOption);
 
 		CommandLineParser parser = new DefaultParser();
 
 		try {
 			CommandLine line = parser.parse(options, args);
+			consumerOverride = line.hasOption("consumer") ? ValidationConsumer.parse(line.getOptionValue("consumer")) : null;
 			if (line.hasOption(runCliOption.getOpt())) {
 				brunCli = true;
 				logger.info("3MF to be run via command line as specified by: -C");
@@ -105,7 +110,13 @@ public class StartUp {
 			System.setProperty("java.awt.headless", "true");
 		}
 		MainFrame mf = new MainFrame();
-		mf.start();
+		try {
+			mf.start();
+		} catch (IllegalArgumentException ex) {
+			logger.error("Invalid 3MF configuration: " + ex.getMessage());
+			if (!brunCli) javax.swing.JOptionPane.showMessageDialog(null, ex.getMessage(), "Invalid 3MF configuration", javax.swing.JOptionPane.ERROR_MESSAGE);
+			System.exit(2);
+		}
 	}
 
 }

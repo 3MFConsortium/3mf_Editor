@@ -13,6 +13,9 @@ param(
     [string]$OutputRoot,
     [switch]$StrictWarnings,
     [ValidateSet('Auto', 'Strict', 'Ignore')][string]$UuidMode = 'Auto',
+    [ValidateSet('Printer', 'Editor')][string]$Consumer = 'Printer',
+    [string[]]$FixtureName,
+    [string]$FixtureList,
     [switch]$InventoryOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -32,25 +35,41 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $SchemaRoot $required))) { throw "Missing schema: $required" }
     }
     $specCases = Get-SpecificationCases $Specification
+    if($FixtureList){
+        if($FixtureName){throw 'Use FixtureName or FixtureList, not both.'}
+        $FixtureName=@(Get-Content -LiteralPath $FixtureList|Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if(-not $FixtureName.Count){throw 'FixtureList is empty.'}
+    }
     $cases = @(Get-ModelCases $TestSuiteRoot $Suite $Polarity)
+    if ($FixtureName) {
+        $cases=@($cases|Where-Object Name -in $FixtureName)
+        foreach($name in $FixtureName){if(-not @($cases|Where-Object Name -eq $name).Count){throw "Requested fixture not found: $name"}}
+    }
+    foreach($case in $cases){
+        $policy=Get-ConsumerExpectation $case.SpecKey $Consumer.ToLowerInvariant()
+        $case.Expected=$policy.Expected
+        $case|Add-Member -NotePropertyName NamingExpected -NotePropertyValue $policy.NamingExpected
+        $case|Add-Member -NotePropertyName ExpectationBasis -NotePropertyValue $policy.Basis
+    }
     if ($cases.Count -eq 0) { throw 'No test models discovered' }
     foreach ($number in $Suite) {
-        if (@($cases | Where-Object Suite -eq $number).Count -eq 0) { throw "No models discovered for requested suite $number" }
+        if (-not $FixtureName -and @($cases | Where-Object Suite -eq $number).Count -eq 0) { throw "No models discovered for requested suite $number" }
     }
     $run = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     [void](New-Item -ItemType Directory -Path $run)
     $cases | Export-Csv (Join-Path $run 'inventory.csv') -NoTypeInformation -Encoding UTF8
     $present = @{}; foreach ($case in $cases) { $present[$case.SpecKey] = $true }
-    $missing = @($specCases.Keys | Sort-Object | Where-Object { $specCases[$_].Suite -in $Suite -and ($Polarity -eq 'All' -or $specCases[$_].Polarity -eq $Polarity.Substring(0, 1)) -and -not $present.ContainsKey($_) })
+    $missing = @($specCases.Keys | Sort-Object | Where-Object { -not $FixtureName -and $specCases[$_].Suite -in $Suite -and ($Polarity -eq 'All' -or $specCases[$_].Polarity -eq $Polarity.Substring(0, 1)) -and -not $present.ContainsKey($_) })
     $extra = @($cases | Where-Object { -not $specCases.ContainsKey($_.SpecKey) } | Select-Object Suite, Name, SpecKey)
     $metadata = [ordered]@{
         SpecificationUrl = 'https://github.com/3MFConsortium/test_suites/blob/master/test_specification/3MF_Test_Specification_v2_4_1.docx'
         Specification = $Specification; SpecificationSHA256 = (Get-FileHash $Specification -Algorithm SHA256).Hash
         TestSuiteRoot = $TestSuiteRoot; SchemaRoot = $SchemaRoot; SelectedSuites = $Suite; Polarity = $Polarity
         Models = $cases.Count; MissingFromCheckout = $missing; NotInAppendixC = $extra
+        FixtureFilter = @($FixtureName); ExpectationPolicy = 'consumer-v1; original naming expectations retained in inventory'
         Scope = 'CLI schema/structure acceptance only. Rendering, printing, alternative selection, colors and geometry appearance require manual verification.'
         StrictWarnings = [bool]$StrictWarnings; InventoryOnly = [bool]$InventoryOnly
-        BatchSize = $BatchSize; TimeoutSeconds = $TimeoutSeconds; UuidMode = $UuidMode; ProductionSuites = $ProductionSuites
+        BatchSize = $BatchSize; TimeoutSeconds = $TimeoutSeconds; UuidMode = $UuidMode; ProductionSuites = $ProductionSuites; Consumer = $Consumer.ToLowerInvariant()
     }
     $metadata | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $run 'summary.json') -Encoding UTF8
     Write-Host "Discovered $($cases.Count) models; $($missing.Count) missing Appendix C entries; $($extra.Count) additional models."
@@ -69,6 +88,9 @@ try {
         $classes = Join-Path $run 'classes'
         [void](New-Item -ItemType Directory -Path $classes)
         $sources = @(Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java' | ForEach-Object { '"' + $_.FullName.Replace('\', '/') + '"' })
+        Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java' | Sort-Object FullName | ForEach-Object {
+            [pscustomobject]@{Path=$_.FullName.Substring($project.Length+1);SHA256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+        } | Export-Csv (Join-Path $run 'source-sha256.csv') -NoTypeInformation -Encoding UTF8
         $sourceList = Join-Path $run 'sources.txt'
         [IO.File]::WriteAllLines($sourceList, [string[]]$sources, [Text.UTF8Encoding]::new($false))
         $compiler = (Get-Command $Javac -ErrorAction Stop).Source
@@ -101,11 +123,18 @@ try {
             $settings | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
             $ignoreUuid = $UuidMode -eq 'Ignore' -or ($UuidMode -eq 'Auto' -and [int]$group.Name -notin $ProductionSuites)
             ('pNoUUIDchk = "' + $(if ($ignoreUuid) { 'true' } else { 'false' }) + '"') | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+            ('validationConsumer = "' + $Consumer.ToLowerInvariant() + '"') | Add-Content (Join-Path $work '3MF.ini') -Encoding ASCII
             Write-Host "Suite $($group.Name): $($offset + 1)-$($offset + $batch.Count)/$($models.Count)"
             $execution = Invoke-CliProcess $javaPath ($launch + @('-C', '-L', 'files.txt', '-I')) $work $TimeoutSeconds
             foreach ($case in $batch) {
                 $xml = Join-Path $work ('cliResults/' + [IO.Path]::ChangeExtension($case.Name, '.xml'))
                 $checked = Test-CliResult $xml $case.Name $case.Expected ([bool]$StrictWarnings)
+                if ($checked.Status -ne 'Error') {
+                    $reportConsumer = (Read-SafeXml ([IO.File]::ReadAllText($xml))).DocumentElement.GetAttribute('consumer')
+                    if ($reportConsumer -ne $Consumer.ToLowerInvariant()) {
+                        $checked.Status = 'Error'; $checked.Detail = 'CLI did not confirm the requested validation consumer.'
+                    }
+                }
                 # A failed process is always an infrastructure error, even if it wrote some XML.
                 if ($execution.TimedOut -or $execution.ExitCode -ne 0) {
                     $checked.Status = 'Error'

@@ -28,6 +28,7 @@ public class IniData {
 	public boolean bdoScroll = true;
 	public boolean bdoWarn = true;
 	public boolean darkMode = false;
+	public ValidationConsumer validationConsumer = ValidationConsumer.PRINTER;
 	public String lastFile = "";
 	public String thumbDir = "";
 	public String transSize = "30150.0, 219850.0, 33700.9, 366300.0, 5000.0, 252800.0";
@@ -35,6 +36,7 @@ public class IniData {
 	public IniData() {
 	}
 	public void readIni(){
+		validationConsumer = ValidationConsumer.PRINTER;
 		try {
 			String workingDir = System.getProperty("user.dir");
 			logger.info("Current working directory : " + workingDir);
@@ -206,6 +208,13 @@ public class IniData {
 					ie=overRide.indexOf("\"", ib+1);
 					darkMode = Boolean.parseBoolean(overRide.substring(ib+1, ie).trim());
 				}
+				ib=overRide.indexOf("validationConsumer");
+				if (ib != -1) {
+					ib=overRide.indexOf("\"", ib);
+					ie=overRide.indexOf("\"", ib+1);
+					if (ib < 0 || ie < 0) throw new IllegalArgumentException("validationConsumer requires a quoted 'printer' or 'editor' value");
+					validationConsumer = ValidationConsumer.parse(overRide.substring(ib+1, ie));
+				}
 				ib=overRide.indexOf("lastFile");
 				if (ib != -1){
 					ib=overRide.indexOf("\"",ib);
@@ -227,6 +236,8 @@ public class IniData {
 			} else {
 				logger.info("3MF.ini not found to override settings.");
 			}
+		} catch (IllegalArgumentException e) {
+			throw e;
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -301,6 +312,7 @@ public class IniData {
 			overRide = "pNoUUIDchk = \"" + sTrue + "\"" + el;
 			fw.write(overRide);
 			fw.write("darkMode = \"" + darkMode + "\"" + el);
+			fw.write("validationConsumer = \"" + validationConsumer.setting() + "\"" + el);
 			fw.close();
 		} catch (Exception e) {
 			e.printStackTrace();

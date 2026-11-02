@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param([string]$TestSuiteRoot, [string]$Java = 'java', [string]$Javac = 'javac')
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../test_suites' }
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../../test_suites' }
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $fixtures = (Resolve-Path -LiteralPath $TestSuiteRoot).Path
 $schema = Join-Path $fixtures 'Consolidated_Schema/Schema'
 $run = Join-Path $project ('tests/cli/results/result-xml-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -29,13 +29,14 @@ foreach ($folder in @('ztmp', 'imagetmp', 'zips')) { [void](New-Item -ItemType D
 [IO.File]::WriteAllLines((Join-Path $work 'files.txt'), [string[]]@($cases | ForEach-Object FullName), [Text.UTF8Encoding]::new($false))
 @(('pschemaLoc = "' + $schema.Replace('\', '/') + '"'), 'iErrMaxStructure = "100"', 'iErrMaxValidataion = "100"') | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
 'pNoUUIDchk = "false"' | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+'validationConsumer = "editor"' | Add-Content (Join-Path $work '3MF.ini') -Encoding ASCII
 $execution = Invoke-CliProcess (Get-Command $Java).Source @('-cp', ($classes + [IO.Path]::PathSeparator + (Join-Path $project 'jar/*')), 'com.qualitylogic.x3mf.StartUp', '-C', '-L', 'files.txt', '-I') $work 180
 
 $results = foreach ($model in $cases) {
     $name = $model.Name
     # Access restrictions alone are incomplete editor validation, not proven corruption.
     # The negative suite's printer acceptance criteria are tracked by Run-Conformance.
-    $expected = if ($model.BaseName -in @('P_XPM_0101_01', 'N_EPX_2606_01') -or $model.BaseName -match '^P_EPX_0740_|^N_EPX_260[24]_') { 'Accept' } else { 'Reject' }
+    $expected = if ($model.BaseName -eq 'P_XPM_0101_01' -or $model.BaseName -match '^P_EPX_0740_|^N_EPX_260[24]_') { 'Accept' } else { 'Reject' }
     $report = Join-Path $work ('cliResults/' + [IO.Path]::ChangeExtension($name, '.xml'))
     $checked = Test-CliResult $report $name $expected
     $problems = [Collections.Generic.List[string]]::new()
@@ -48,6 +49,7 @@ $results = foreach ($model in $cases) {
         }
         if ($model.BaseName -eq 'N_EPX_2605_02' -and -not $doc.SelectSingleNode('//*[@issueID="ER_190"]')) { $problems.Add('Missing encrypted-data corruption error') }
         if ($model.BaseName -eq 'N_EPX_2606_02' -and -not $doc.SelectSingleNode('//*[@issueID="ER_191"]')) { $problems.Add('Missing keystore relationship error') }
+        if ($model.BaseName -eq 'N_EPX_2606_01' -and -not $doc.SelectSingleNode('//*[@issueID="ER_198"]')) { $problems.Add('Missing encrypted-file relationship error') }
         if ($doc.SelectNodes('//Issue/Issue | //PrimaryIssue/Issue').Count) { $problems.Add('Nested diagnostics') }
         foreach ($issue in $doc.DocumentElement.SelectNodes('./Issue | ./PrimaryIssue')) {
             if (-not $issue.InnerText.Trim()) { $problems.Add('Empty diagnostic') }

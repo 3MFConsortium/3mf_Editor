@@ -14,6 +14,7 @@ public final class StructureWarningTest {
     private static FileStructureCheck validate(String path, String schema) {
         StartUp.brunCli = true;
         FileStructureCheck result = new FileStructureCheck();
+        result.consumer = ValidationConsumer.EDITOR;
         result.fCurrentFile = path;
         result.fSchemaLoc = schema;
         result.iErrMaxStr = 100;

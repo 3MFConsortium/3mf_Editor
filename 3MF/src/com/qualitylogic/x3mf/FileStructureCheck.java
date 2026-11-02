@@ -49,8 +49,12 @@ public class FileStructureCheck {
 	public List<KeyInfo> keyinfo = null;
 	public int iErrMaxStr = 9;
 	public int iWrnMaxStr = 9;
+	public ValidationConsumer consumer = ValidationConsumer.PRINTER;
 	private final Set<String> referenceWhitespaceParts = new HashSet<String>();
 	private GeometryCheck geometry;
+	private ModelRules modelRules;
+	private Set<String> unsupportedAlternatives;
+	private final Set<String> reportedUnsupportedAlternatives = new HashSet<String>();
 	private boolean geometryLimitReported;
 	public boolean validationIncomplete;
 	public boolean bnonSecure = true;
@@ -139,9 +143,9 @@ public class FileStructureCheck {
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_190", "ER_191", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_190", "ER_191", "ER_192", "ER_193", "ER_194", "ER_195", "ER_196", "ER_197", "ER_198", "ER_199", "ER_200", "ER_201", "ER_202", "ER_203", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "WR_030", "WR_031", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "WR_030", "WR_031", "WR_032", "ER_176");
 
 	public FileStructureCheck() {
 	}
@@ -230,9 +234,15 @@ public class FileStructureCheck {
 		iwrCnt = 0;
 		validationIncomplete = false;
 		geometryLimitReported = false;
-		geometry = new GeometryCheck(this::geometryIssue);
+		geometry = new GeometryCheck(this::geometryIssue, consumer);
+		modelRules = new ModelRules((code, warning, message) -> {
+			if (warning) geometryIssue(code, true, message);
+			else structureIssue(code, "model semantics", message);
+		}, consumer);
 		referenceWhitespaceParts.clear();
 		inaccessibleParts.clear();
+		unsupportedAlternatives = null;
+		reportedUnsupportedAlternatives.clear();
 		aRelFiles.clear();
 		laRelNodes.clear();
 		relationshipRels.clear();
@@ -537,8 +547,9 @@ public class FileStructureCheck {
 						String ltype = defN.getAttributes().getNamedItem("Type").getTextContent();
 						if (ltype.toLowerCase().contains("keystore"))
 							keystorecheck = ltarg;
-						String parent = name.substring(0, name.lastIndexOf("/_rels"));
-						if (!parent.substring(0, 1).equals("/"))
+						int relationshipFolder = name.lastIndexOf("/_rels");
+						String parent = relationshipFolder < 0 ? "/" : name.substring(0, relationshipFolder);
+						if (!parent.startsWith("/"))
 							parent = "/" + parent;
 						if (ltype.toLowerCase().contains("keystore"))
 							keystorecheck = name + "|" + ltarg;
@@ -789,6 +800,10 @@ public class FileStructureCheck {
 							sOverRideType.add(stp);
 						}
 						String pn = defN.getAttributes().getNamedItem("PartName").getTextContent().trim();
+						if (pn.isEmpty()) {
+							structureIssue("ER_008", "content type error", "Override PartName must not be empty.");
+							continue;
+						}
 
 						// Checks if the PartName is a relative directory (starts with a slash)
 						if (pn.charAt(0) != '/') {
@@ -1107,6 +1122,8 @@ public class FileStructureCheck {
 					continue;
 				if (name.contentEquals("[Content_Types].xml"))
 					continue;
+				if (name.endsWith(".rels") && !conTypes.get(3).equalsIgnoreCase(declaredContentType("/" + name)))
+					structureIssue("ER_198", "relationship content type", "Relationships part " + name + " must have content type " + conTypes.get(3) + ".");
 				bLocate = false;
 				if (nType_default != null) {
 					for (int ic = 0; ic < nType_default.getLength(); ic++) {
@@ -1261,6 +1278,8 @@ public class FileStructureCheck {
 
 				}
 			}
+			if (bLocate && !conTypes.get(0).equalsIgnoreCase(declaredContentType(sRootModel)))
+				structureIssue("ER_198", "start part", "StartPart must have the model content type: " + sRootModel + ".");
 			if (!bLocate) {
 				fErrorReturn += "<br>ER_020: Well known Id " + srel0 + " not found  in _rels/.rels as required.<br>";
 				fxmlErrorReturn += "<Issue  issueID=\"ER_020\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
@@ -1461,6 +1480,7 @@ public class FileStructureCheck {
 							}
 						}
 						if (!bfnde) {
+							structureIssue("ER_198", "encrypted relationship", "Encrypted model " + ename + " requires an encryptedfile relationship.");
 							fWarningReturn += "<br>WR_019: The file " + ename
 									+ " is encrypted but an encryptedfile relationship was not specified.<br>";
 							fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
@@ -1510,7 +1530,13 @@ public class FileStructureCheck {
 					if (!checkReferenceWhitespace(doc, ename.substring(1)))
 						return;
 
+					if (ModelSchema.unsupportedRequired(doc) != null && skipUnsupportedAlternative(zfile, ename)) {
+						int position = entryNames.indexOf(ename);
+						if (position >= 0) bentryNames.set(position, true);
+						continue;
+					}
 					checkModelRules(doc, ename);
+					modelRules.addModel(doc, ename);
 					// gets a list of the uuids and stackids, expanded to
 					// include basematerials if present
 					stackId.clear();
@@ -2754,19 +2780,18 @@ public class FileStructureCheck {
 					}
 					nl = doc.getElementsByTagNameNS(sns, "slicestack");
 					nObj = doc.getElementsByTagName("object");
-					boolean fndObj = false;
+					Set<String> localSliceIds = new HashSet<String>();
+					int sliceCount = nl.getLength();
+					for (int ic = 0; ic < sliceCount; ic++)
+						localSliceIds.add(nl.item(ic).getAttributes().getNamedItem("id").getTextContent().trim());
+					int sliceObjectCount = nObj.getLength();
 					String sId = "";
-					for (int ico = 0; ico < nObj.getLength(); ico++) {
+					for (int ico = 0; ico < sliceObjectCount; ico++) {
 						Node defOb = nObj.item(ico);
 						if (defOb.getAttributes().getNamedItemNS(sns, "slicestackid") != null) {
 							sId = defOb.getAttributes().getNamedItemNS(sns, "slicestackid").getTextContent().trim();
 							ssIdListRef.add(ename + "|" + sId);
-							for (int ic = 0; ic < nl.getLength(); ic++) {
-								Node defN = nl.item(ic);
-								if (sId.contentEquals(defN.getAttributes().getNamedItem("id").getTextContent()))
-									fndObj = true;
-							}
-							if (!fndObj) {
+							if (!localSliceIds.contains(sId)) {
 								fErrorReturn += "<br>ER_064: Did not find an slicestack id for object with slicestackid="
 										+ sId + " in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_064\" severity=\"high\" class=\"structure\" type=\"ID error\">";
@@ -2859,6 +2884,7 @@ public class FileStructureCheck {
 				} // end of models looping
 			}
 			geometry.finish(sRootModel);
+			modelRules.finish(sRootModel);
 			for (int i = 0; i < bentryNames.size(); i++) {
 				if (!bentryNames.get(i)) {
 					String addCom = "";
@@ -2978,7 +3004,7 @@ public class FileStructureCheck {
 				}
 			}
 
-		} catch (ArrayIndexOutOfBoundsException | NullPointerException | IOException | SAXException
+		} catch (IndexOutOfBoundsException | NullPointerException | IOException | SAXException
 				| ParserConfigurationException ex) {
 			if (ex instanceof SAXException && ex.getMessage() != null && ex.getMessage().contains("DOCTYPE")) {
 				structureIssue("ER_186", "XML DTD", "DTD content is not permitted in package XML.");
@@ -5628,6 +5654,7 @@ public class FileStructureCheck {
 								id = node.getParentNode().getAttributes().getNamedItem("id").getTextContent();
 							}
 							try (ZipFile zfile = new ZipFile(fCurrentFile)) {
+								if (skipUnsupportedAlternative(zfile, fileName)) continue;
 								boolean fndObj = false;
 								boolean inaccessible = false;
 								Enumeration<? extends ZipEntry> entries = zfile.entries();
@@ -7301,6 +7328,19 @@ public class FileStructureCheck {
 		errChk(code);
 	}
 
+	void unexpectedFailure(Exception ex) {
+		structureIssue("ER_077", "unexpected exception", "Structural validation could not complete: " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
+	}
+
+	private boolean skipUnsupportedAlternative(ZipFile zip, String part) {
+		if (unsupportedAlternatives == null) unsupportedAlternatives = AlternativePolicy.skippedParts(zip, consumer);
+		if (!unsupportedAlternatives.contains(part)) return false;
+		modelRules.unavailable(part);
+		if (reportedUnsupportedAlternatives.add(part)) structureWarning("WR_032", "unsupported alternative",
+				"Unsupported alternative " + part + " was skipped; a supported " + (consumer == ValidationConsumer.PRINTER ? "full-resolution " : "") + "representation is available. Rendering/printing was not evaluated.");
+		return true;
+	}
+
 	private void structureWarning(String code, String type, String message) {
 		if (iwrCnt >= Math.max(1, iWrnMaxStr)) return;
 		fxmlWarningReturn += "<Issue issueID=\"" + code + "\" severity=\"info\" class=\"structure\" type=\"" + type + "\">"
@@ -7312,6 +7352,7 @@ public class FileStructureCheck {
 
 	private final Set<String> inaccessibleParts = new HashSet<String>();
 	private void inaccessibleModel(String file) {
+		modelRules.unavailable(file);
 		if (!inaccessibleParts.add(file)) return;
 		validationIncomplete = true;
 		if (inaccessibleParts.size() > 1) return;
@@ -7363,8 +7404,11 @@ public class FileStructureCheck {
 				if (!value.matches("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?"))
 					structureIssue("ER_189", "color value", "Invalid hexadecimal color " + value + " in " + file);
 			}
-			if (!GeometryCheck.CORE.equals(ns) || !("component".equals(e.getLocalName()) || "item".equals(e.getLocalName()))) continue;
-			String path = e.getAttributeNS(GeometryCheck.PROD, "path").trim();
+			String path = "";
+			if (GeometryCheck.CORE.equals(ns) && ("component".equals(e.getLocalName()) || "item".equals(e.getLocalName())))
+				path = e.getAttributeNS(GeometryCheck.PROD, "path").trim();
+			if (sns.equals(ns) && "sliceref".equals(e.getLocalName())) path = e.getAttribute("slicepath").trim();
+			if (GeometryCheck.CORE.equals(ns) && "object".equals(e.getLocalName())) path = e.getAttributeNS(sns, "slicepath").trim();
 			if (path.isEmpty()) continue;
 			String target = GeometryCheck.part(file, path);
 			String rels = file.substring(0, file.lastIndexOf('/') + 1) + "_rels/" + file.substring(file.lastIndexOf('/') + 1) + ".rels";
@@ -7382,7 +7426,7 @@ public class FileStructureCheck {
 	private String declaredContentType(String part) {
 		if (nType_override != null) for (int i = 0; i < nType_override.getLength(); i++) {
 			Element e = (Element)nType_override.item(i);
-			if (part.equals(GeometryCheck.part("/", e.getAttribute("PartName")))) return e.getAttribute("ContentType").trim();
+			if (part.equalsIgnoreCase(GeometryCheck.part("/", e.getAttribute("PartName")))) return e.getAttribute("ContentType").trim();
 		}
 		int dot = part.lastIndexOf('.');
 		if (dot >= 0 && nType_default != null) for (int i = 0; i < nType_default.getLength(); i++) {

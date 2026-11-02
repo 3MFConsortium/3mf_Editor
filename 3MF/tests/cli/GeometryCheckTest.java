@@ -102,6 +102,15 @@ public final class GeometryCheckTest {
         String slicedWrapper = wrapper.replace("<object id='2'>","<object id='2' "+sliceAttributes+">");
         expect("ancestor slices override component mesh",run(shape("",negative)+slicedWrapper,item("2",IDENTITY),"requiredextensions='s'"));
         expect("standalone use is still checked",run(shape("",negative)+slicedWrapper,item("2",IDENTITY)+item("1",IDENTITY),"requiredextensions='s'"),"ER_180");
+        String stack = "<s:slicestack id='7' zbottom='0'><s:slice ztop='1'><s:vertices>"
+            + "<s:vertex x='0' y='0'/><s:vertex x='1' y='0'/><s:vertex x='0' y='1'/><s:vertex x='-999' y='-999'/>"
+            + "</s:vertices><s:polygon startv='0'><s:segment v2='1'/><s:segment v2='2'/><s:segment v2='0'/>"
+            + "</s:polygon></s:slice></s:slicestack>";
+        expect("slice contour placement",run(shape(sliceAttributes,positive)+stack,item("1","1 0 0 0 1 0 0 0 1 -2 0 0"),"requiredextensions='s'"),"WR_028");
+        expect("unused slice vertex ignored",run(shape(sliceAttributes,positive)+stack,item("1",IDENTITY),"requiredextensions='s'"));
+        expect("slice geometry supersedes negative fallback",run(shape(sliceAttributes,mesh(vertices(-10,1),tetra(true,false,false,0)))+stack,item("1",IDENTITY),"requiredextensions='s'"));
+        expect("empty contours have no placement",run(shape(sliceAttributes,positive)+stack.replace("<s:segment v2='1'/><s:segment v2='2'/><s:segment v2='0'/>",""),item("1","1 0 0 0 1 0 0 0 1 -2 0 0"),"requiredextensions='s'"));
+        crossSliceChecks(positive, stack, sliceAttributes);
         String displacement = positive.replace("<mesh>","<d:displacementmesh>").replace("</mesh>","</d:displacementmesh>")
             .replace("<vertices>","<d:vertices>").replace("</vertices>","</d:vertices>")
             .replace("<vertex ","<d:vertex ").replace("<triangles>","<d:triangles>").replace("</triangles>","</d:triangles>").replace("<triangle ","<d:triangle ");
@@ -139,5 +148,17 @@ public final class GeometryCheckTest {
             expect("signature="+png+", declaredPNG="+declaredPng,cross,(png&&declaredPng)?new String[]{}:new String[]{"ER_181"});
         }
         System.out.println("Geometry checks passed: " + checks);
+    }
+    private static void crossSliceChecks(String mesh, String stack, String attributes) throws Exception {
+        for (ValidationConsumer consumer : ValidationConsumer.values()) {
+            List<String> issues = new ArrayList<>();
+            GeometryCheck check = new GeometryCheck((code,w,text)->issues.add(code), consumer);
+            String wrapper = "<s:slicestack id='8' zbottom='0'><s:sliceref slicepath='/2D/slices.model' slicestackid='7'/></s:slicestack>";
+            add(check,"/3D/main.model",model(shape(attributes.replace("'7'","'8'"),mesh)+wrapper,
+                item("1","1 0 0 0 1 0 0 0 1 -2 0 0"),"requiredextensions='s'"));
+            add(check,"/2D/slices.model",model(stack,"",""));
+            check.finish("/3D/main.model");
+            expect("cross-model slice placement " + consumer,issues,consumer == ValidationConsumer.PRINTER ? "ER_202" : "WR_028");
+        }
     }
 }

@@ -12,7 +12,7 @@ This utilities primary use case is the development of test cases and the validat
 
 A secondary use case for this utility is to enable ad hoc editing of 3MF files to assist with learning about the 3MF imaging format and the validation of 3MF files to determine if the conform to the 3MF standard.
 
-![Document image](3MF_Editor_Guide_v1_00_assets/image1.png)
+![Document image](3MF_Editor_Guide_assets/image1.png)
 
 ## Installation and Quick Start
 
@@ -44,6 +44,39 @@ _**Use the Editor to edit, validate, and print 3MF files**_
 
 - When you are done editing, you can select From the **Tools** menu select **Validate Package, Schema, and Structure** to confirm that there are no errors in the file. The edited file can be save with options in the File menu.
 
+## Validation consumer
+
+Validation defaults to the **printer** consumer. To select a consumer for the
+GUI and CLI, add this setting to `3MF.ini` in the working directory:
+
+```ini
+validationConsumer = "printer"
+```
+
+Use `"editor"` to allow editing packages whose printable content is unavailable
+or only available at low resolution. Values are case-insensitive; missing
+settings default to printer, and invalid values stop startup with an error.
+
+The optional CLI parameter `--consumer editor` or `--consumer printer` overrides
+the INI setting for that run without changing the stored choice. For example:
+
+```text
+java -jar 3MFedit.jar -C -F example.3mf -I --consumer editor
+```
+
+Printer validation requires an accessible, supported full-resolution
+representation for every printable build item, including required dependencies.
+An eligible alternative can satisfy this requirement. Structural validation also
+rejects singular printable transforms and transformed base meshes or authoritative
+slice contours outside the positive coordinate octant. Editor validation retains warnings for these
+conditions. Ordinary schema and package-conformance errors remain errors in both
+profiles. XML test results identify the selected consumer in their `consumer`
+attribute.
+
+Schema-only validation checks representation availability but does not perform
+geometry checks. Validation does not render alternatives, establish printer-bed
+bounds, or check final displacement placement.
+
 ## 3MF Editor Menu Options
 
 The Editor provides the following functionality:
@@ -56,7 +89,7 @@ The Editor provides the following functionality:
 
 Note that the 3MF Editor’s primary purpose was to aid in the development of test cases, which are typically fairly small documents. Thus the 3MF Editor cannot edit or validate OPC Parts whose uncompressed size is greater than 75 MB.
 
-![Document image](3MF_Editor_Guide_v1_00_assets/image1.png)
+![Document image](3MF_Editor__assets/image1.png)
 
 ### Screen Layout and Context Menus:
 

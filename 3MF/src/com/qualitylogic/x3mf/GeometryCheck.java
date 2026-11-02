@@ -27,14 +27,18 @@ final class GeometryCheck {
     static final String DISP = "http://schemas.3mf.io/3dmanufacturing/displacement/2023/10";
     interface Sink { void issue(String code, boolean warning, String message); }
     private final Sink sink;
+    private final ValidationConsumer consumer;
     private final int budget;
     private int elements;
     private int visits;
+    private int sliceVisits;
     private final Map<String, Model> models = new LinkedHashMap<>();
     private final Set<String> reported = new HashSet<>();
     private final Set<Shape> visited = new HashSet<>();
-    GeometryCheck(Sink sink) { this(sink, 500000); }
-    GeometryCheck(Sink sink, int budget) { this.sink = sink; this.budget = budget; }
+    GeometryCheck(Sink sink) { this(sink, 500000, ValidationConsumer.EDITOR); }
+    GeometryCheck(Sink sink, int budget) { this(sink, budget, ValidationConsumer.EDITOR); }
+    GeometryCheck(Sink sink, ValidationConsumer consumer) { this(sink, 500000, consumer); }
+    private GeometryCheck(Sink sink, int budget, ValidationConsumer consumer) { this.sink = sink; this.budget = budget; this.consumer = consumer; }
 
     private void issue(String code, boolean warning, String key, String text) {
         if (reported.add(code + "|" + key)) sink.issue(code, warning, text);
@@ -66,6 +70,7 @@ final class GeometryCheck {
     }
     private static final class Model {
         final Map<String, Shape> objects = new LinkedHashMap<>();
+        final Map<String, SliceStack> stacks = new LinkedHashMap<>();
         final List<Reference> build = new ArrayList<>();
         double unit;
     }
@@ -76,12 +81,22 @@ final class GeometryCheck {
     }
     private static final class Shape {
         String key;
+        String slicePart, sliceId;
         boolean solid, sliced, displaced;
         double[] points;
         BitSet used;
         boolean nonManifold, inconsistentOrientation, inverted;
         int triangleCount = -1;
         final List<Reference> components = new ArrayList<>();
+    }
+    private static final class SliceStack {
+        double bottom;
+        final List<Layer> layers = new ArrayList<>();
+        final List<Reference> refs = new ArrayList<>();
+    }
+    private static final class Layer {
+        double top;
+        double[] xy;
     }
     void addModel(Document doc, String name, ZipFile zip, Function<String, String> contentType) throws IOException {
         String nameKey = part("/", name);
@@ -94,6 +109,7 @@ final class GeometryCheck {
         boolean requiredSlice = false;
         for (String prefix : root.getAttribute("requiredextensions").trim().split("\\s+"))
             if (SLICE.equals(root.lookupNamespaceURI(prefix))) requiredSlice = true;
+        readStacks(child(root, CORE, "resources"), model, nameKey);
         for (Element obj : children(child(root, CORE, "resources"))) {
             if (is(obj, DISP, "displacement2d")) checkImage(obj, nameKey, zip, contentType);
             if (!is(obj, CORE, "object")) continue;
@@ -104,6 +120,9 @@ final class GeometryCheck {
             shape.solid = type.isEmpty() || type.equals("model") || type.equals("solidsupport");
             shape.sliced = requiredSlice && obj.hasAttributeNS(SLICE, "slicestackid")
                     && "lowres".equals(obj.getAttributeNS(SLICE, "meshresolution"));
+            shape.sliceId = obj.getAttributeNS(SLICE, "slicestackid").trim();
+            String slicePath = obj.getAttributeNS(SLICE, "slicepath").trim();
+            shape.slicePart = slicePath.isEmpty() ? nameKey : part(nameKey, slicePath);
             Element mesh = child(obj, CORE, "mesh");
             if (mesh == null) { mesh = child(obj, DISP, "displacementmesh"); shape.displaced = mesh != null; }
             if (mesh != null) readMesh(mesh, shape);
@@ -119,6 +138,54 @@ final class GeometryCheck {
                 if (++elements > budget) { incomplete("references", "build reference budget exceeded."); break; }
                 model.build.add(reference(item, nameKey));
             }
+    }
+    private void readStacks(Element resources, Model model, String name) {
+        for (Element e : children(resources)) if (is(e, SLICE, "slicestack")) {
+            if (++elements > budget) { incomplete("slices", "slice geometry budget exceeded."); return; }
+            SliceStack stack = new SliceStack();
+            try { stack.bottom = Double.parseDouble(e.getAttribute("zbottom")); }
+            catch (NumberFormatException ex) { continue; } // Structural/schema checks report malformed values.
+            model.stacks.put(e.getAttribute("id").trim(), stack);
+            for (Element entry : children(e)) {
+                if (is(entry, SLICE, "sliceref")) {
+                    if (++elements > budget) { incomplete("slices", "slice geometry budget exceeded."); return; }
+                    Reference ref = new Reference();
+                    String target = entry.getAttribute("slicepath").trim();
+                    ref.part = target.isEmpty() ? name : part(name, target);
+                    ref.id = entry.getAttribute("slicestackid").trim();
+                    stack.refs.add(ref);
+                } else if (is(entry, SLICE, "slice")) {
+                    List<Element> vertices = children(child(entry, SLICE, "vertices"));
+                    if ((long)elements + vertices.size() > budget) { incomplete("slices", "slice geometry budget exceeded."); return; }
+                    elements += vertices.size();
+                    BitSet used = new BitSet();
+                    for (Element polygon : children(entry)) if (is(polygon, SLICE, "polygon")) {
+                        List<Element> segments = children(polygon);
+                        if (segments.isEmpty()) continue; // Empty contours do not contribute geometry.
+                        try {
+                            int start = Integer.parseInt(polygon.getAttribute("startv"));
+                            if (start >= 0 && start < vertices.size()) used.set(start);
+                            for (Element segment : segments) if (is(segment, SLICE, "segment")) {
+                                if (++elements > budget) { incomplete("slices", "slice geometry budget exceeded."); return; }
+                                int end = Integer.parseInt(segment.getAttribute("v2"));
+                                if (end >= 0 && end < vertices.size()) used.set(end);
+                            }
+                        } catch (NumberFormatException ex) { /* Existing semantic checks diagnose invalid indices. */ }
+                    }
+                    Layer layer = new Layer();
+                    try {
+                        layer.top = Double.parseDouble(entry.getAttribute("ztop"));
+                        layer.xy = new double[used.cardinality()*2];
+                        int at = 0;
+                        for (int i = used.nextSetBit(0); i >= 0; i = used.nextSetBit(i+1)) {
+                            layer.xy[at++] = Double.parseDouble(vertices.get(i).getAttribute("x"));
+                            layer.xy[at++] = Double.parseDouble(vertices.get(i).getAttribute("y"));
+                        }
+                        stack.layers.add(layer);
+                    } catch (NumberFormatException ex) { /* Existing semantic checks diagnose malformed coordinates. */ }
+                }
+            }
+        }
     }
     private Reference reference(Element e, String base) {
         Reference ref = new Reference();
@@ -257,7 +324,14 @@ final class GeometryCheck {
         double[] local = identity();
         local[0] = local[4] = local[8] = model.unit / parentUnit;
         double[] world = multiply(multiply(local, ref.matrix), parent);
-        if (singular(world)) issue("WR_027", true, "composed:" + shape.key, "Singular or nearly singular composed transform for " + shape.key + ".");
+        if (singular(world)) issue(consumer == ValidationConsumer.PRINTER ? "ER_201" : "WR_027", consumer != ValidationConsumer.PRINTER,
+            "composed:" + shape.key, "Singular or nearly singular composed transform for " + shape.key + ".");
+        if (!sliced && shape.sliced) {
+            double[] min = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
+            double[] magnitude = {1, 1, 1};
+            sliceBounds(shape.slicePart, shape.sliceId, world, model.unit, null, min, magnitude, new HashSet<String>(), 0);
+            placement(shape.key, "authoritative slices", min, magnitude);
+        }
         if (!useSlices && !shape.displaced && shape.points != null) {
             double[] min = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
             double[] magnitude = {1, 1, 1};
@@ -267,13 +341,48 @@ final class GeometryCheck {
                     min[j] = Math.min(min[j], value); magnitude[j] = Math.max(magnitude[j], Math.abs(value));
                 }
             }
-            if (!Double.isFinite(magnitude[0]) || !Double.isFinite(magnitude[1]) || !Double.isFinite(magnitude[2])) incomplete("numeric:" + shape.key, "transformed coordinates overflow for " + shape.key + ".");
-            else if (min[0] < -1e-9*magnitude[0] || min[1] < -1e-9*magnitude[1] || min[2] < -1e-9*magnitude[2])
-                issue("WR_028", true, shape.key, "Transformed base mesh extends outside the positive octant: " + shape.key
-                        + " (minimum coordinates " + min[0] + ", " + min[1] + ", " + min[2] + "). Printer bed bounds were not evaluated.");
+            placement(shape.key, "base mesh", min, magnitude);
         }
         for (Reference component : shape.components) walk(component, world, model.unit, useSlices, path, depth + 1);
         path.remove(shape.key);
+    }
+    private void placement(String key, String representation, double[] min, double[] magnitude) {
+        if (!Double.isFinite(magnitude[0]) || !Double.isFinite(magnitude[1]) || !Double.isFinite(magnitude[2])) incomplete("numeric:" + key, "transformed coordinates overflow for " + key + ".");
+        else if (min[0] < -1e-9*magnitude[0] || min[1] < -1e-9*magnitude[1] || min[2] < -1e-9*magnitude[2])
+            issue(consumer == ValidationConsumer.PRINTER ? "ER_202" : "WR_028", consumer != ValidationConsumer.PRINTER,
+                key, "Transformed " + representation + " extends outside the positive octant: " + key
+                    + " (minimum coordinates " + min[0] + ", " + min[1] + ", " + min[2] + "). Printer bed bounds were not evaluated.");
+    }
+    private double sliceBounds(String name, String id, double[] world, double parentUnit, Double floor,
+            double[] min, double[] magnitude, Set<String> path, int depth) {
+        if (++sliceVisits > budget || depth > 128) { incomplete("slice-traversal", "slice traversal budget exceeded."); return Double.NaN; }
+        Model model = models.get(name);
+        SliceStack stack = model == null ? null : model.stacks.get(id);
+        if (stack == null) return Double.NaN; // Package reference checks handle unavailable stacks.
+        String key = name + "#" + id;
+        if (!path.add(key)) { incomplete("slice-cycle", "cyclic slice references."); return Double.NaN; }
+        double ratio = model.unit / parentUnit;
+        double bottom = floor == null ? stack.bottom : floor / ratio;
+        double[] scale = identity(); scale[0] = scale[4] = scale[8] = ratio;
+        double[] transform = multiply(scale, world);
+        for (Layer layer : stack.layers) {
+            for (int i = 0; i < layer.xy.length; i += 2) for (double z : new double[]{bottom, layer.top}) {
+                if (++sliceVisits > budget) { incomplete("slice-traversal", "slice traversal budget exceeded."); path.remove(key); return Double.NaN; }
+                for (int j = 0; j < 3; j++) {
+                    double value = layer.xy[i]*transform[j] + layer.xy[i+1]*transform[3+j] + z*transform[6+j] + transform[9+j];
+                    min[j] = Math.min(min[j], value); magnitude[j] = Math.max(magnitude[j], Math.abs(value));
+                }
+            }
+            bottom = layer.top;
+        }
+        boolean first = true;
+        for (Reference ref : stack.refs) {
+            bottom = sliceBounds(ref.part, ref.id, transform, model.unit, first && floor == null ? null : bottom,
+                min, magnitude, path, depth + 1);
+            first = false;
+        }
+        path.remove(key);
+        return bottom * ratio;
     }
     private static double unit(String unit) {
         switch (unit) {

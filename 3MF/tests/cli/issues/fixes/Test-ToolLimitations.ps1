@@ -7,9 +7,9 @@ param(
     [ValidateRange(512, 4096)][int]$HeapMB = 2048
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../test_suites' }
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../../test_suites' }
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $fixtures = (Resolve-Path -LiteralPath $TestSuiteRoot).Path
 $schema = Join-Path $fixtures 'Consolidated_Schema/Schema'
 if (-not (Test-Path (Join-Path $schema 'qli_3MF.xsd'))) { throw 'Consolidated schema not found' }
@@ -115,6 +115,7 @@ foreach ($case in $cases) {
         [IO.File]::WriteAllLines((Join-Path $work 'files.txt'), [string[]]@($model), [Text.UTF8Encoding]::new($false))
         @(('pschemaLoc = "' + $schema.Replace('\', '/') + '"'), 'iErrMaxStructure = "100"', 'iErrMaxValidataion = "100"') | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
         'pNoUUIDchk = "false"' | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+        'validationConsumer = "editor"' | Add-Content (Join-Path $work '3MF.ini') -Encoding ASCII
         Write-Host "Checking $($case.Name)"
         $arguments = @("-Xmx${HeapMB}m", '-cp', $classpath, 'com.qualitylogic.x3mf.StartUp', '-C', '-L', 'files.txt', '-I')
         if ($case.ContainsKey('ExtraArgs')) { $arguments += $case.ExtraArgs }

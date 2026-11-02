@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param([string]$Java = 'java', [string]$Javac = 'javac', [int]$TimeoutSeconds = 20)
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $run = Join-Path $project ('tests/cli/results/long-xml-lines-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)

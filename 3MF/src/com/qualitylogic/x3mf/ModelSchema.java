@@ -17,10 +17,98 @@ import org.xml.sax.InputSource;
 import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
+import org.xml.sax.helpers.XMLFilterImpl;
 
 /** Compatibility corrections for the consolidated Core/extension schema. */
 final class ModelSchema {
     private ModelSchema() { }
+
+    // Match complete namespace URIs, including the newer schemas.3mf.io extensions.
+    private static final java.util.Set<String> SUPPORTED = new java.util.HashSet<>(java.util.Arrays.asList(
+            GeometryCheck.CORE, GeometryCheck.SLICE, GeometryCheck.PROD, GeometryCheck.DISP,
+            FileStructureCheck.bns, FileStructureCheck.scns,
+            "http://schemas.microsoft.com/3dmanufacturing/material/2015/02",
+            "http://schemas.microsoft.com/3dmanufacturing/beamlattice/balls/2020/07",
+            "http://schemas.microsoft.com/3dmanufacturing/mirroring/2021/07",
+            "http://schemas.microsoft.com/3dmanufacturing/trianglesets/2021/07",
+            "http://schemas.microsoft.com/3dmanufacturing/production/alternatives/2021/04",
+            "http://schemas.3mf.io/3dmanufacturing/booleanoperations/2023/07",
+            "http://schemas.3mf.io/3dmanufacturing/volumetric/2022/01",
+            "http://schemas.3mf.io/3dmanufacturing/implicit/2023/12",
+            "http://schemas.3mf.io/3dmanufacturing/toolpath/2026/03",
+            "http://print.ticket.com"));
+    static boolean supports(String uri) { return SUPPORTED.contains(uri); }
+
+    static String unsupportedRequired(Document doc) {
+        Element root = doc.getDocumentElement();
+        if (!GeometryCheck.CORE.equals(root.getNamespaceURI()) || !"model".equals(root.getLocalName())) return null;
+        for (String prefix : root.getAttribute("requiredextensions").trim().split("\\s+"))
+            if (!prefix.isEmpty() && !supports(root.lookupNamespaceURI(prefix))) return prefix;
+        return null;
+    }
+
+    /** Inspect only the model header; unsupported alternatives must not be processed. */
+    static boolean unsupportedRequired(java.io.InputStream input) throws SAXException, IOException {
+        return unsupportedRequired(new InputSource(input));
+    }
+    static boolean unsupportedRequired(String xml) throws SAXException, IOException {
+        return unsupportedRequired(new InputSource(new StringReader(xml)));
+    }
+    private static boolean unsupportedRequired(InputSource input) throws SAXException, IOException {
+        final java.util.Map<String, String> prefixes = new java.util.HashMap<>();
+        final boolean[] unsupported = {false};
+        final SAXException done = new SAXException("model header inspected");
+        org.xml.sax.XMLReader reader = SafeXml.source("").getXMLReader();
+        reader.setContentHandler(new DefaultHandler() {
+            @Override public void startPrefixMapping(String prefix, String uri) { prefixes.put(prefix, uri); }
+            @Override public void startElement(String uri, String local, String name, Attributes attributes) throws SAXException {
+                String required = attributes.getValue("requiredextensions");
+                if (GeometryCheck.CORE.equals(uri) && "model".equals(local) && required != null)
+                    for (String prefix : required.trim().split("\\s+"))
+                        if (!prefix.isEmpty() && !supports(prefixes.get(prefix))) unsupported[0] = true;
+                throw done;
+            }
+        });
+        try { reader.parse(input); } catch (SAXException ex) { if (ex != done) throw ex; }
+        return unsupported[0];
+    }
+
+    /** Ignore unsupported optional element subtrees, never errors in supported content. */
+    static SAXSource validationSource(String xml) throws SAXException {
+        SAXSource source = SafeXml.source(xml);
+        XMLFilterImpl filter = new XMLFilterImpl(source.getXMLReader()) {
+            private final java.util.Map<String, String> prefixes = new java.util.HashMap<>();
+            private boolean rootSeen, model;
+            private int ignored;
+            @Override public void startPrefixMapping(String prefix, String uri) throws SAXException {
+                if (!rootSeen) prefixes.put(prefix, uri);
+                super.startPrefixMapping(prefix, uri);
+            }
+            @Override public void startElement(String uri, String local, String name, Attributes attributes) throws SAXException {
+                if (!rootSeen) {
+                    rootSeen = true;
+                    model = GeometryCheck.CORE.equals(uri) && "model".equals(local);
+                    String required = attributes.getValue("requiredextensions");
+                    if (model && required != null) for (String prefix : required.trim().split("\\s+"))
+                        if (!prefix.isEmpty() && !supports(prefixes.get(prefix)))
+                            throw new SAXException("Unsupported required extension: " + prefix + " (" + prefixes.get(prefix) + ").");
+                }
+                if (ignored > 0 || (model && uri != null && !uri.isEmpty() && !supports(uri))) { ignored++; return; }
+                super.startElement(uri, local, name, attributes);
+            }
+            @Override public void endElement(String uri, String local, String name) throws SAXException {
+                if (ignored > 0) { ignored--; return; }
+                super.endElement(uri, local, name);
+            }
+            @Override public void characters(char[] ch, int start, int length) throws SAXException {
+                if (ignored == 0) super.characters(ch, start, length);
+            }
+            @Override public void ignorableWhitespace(char[] ch, int start, int length) throws SAXException {
+                if (ignored == 0) super.ignorableWhitespace(ch, start, length);
+            }
+        };
+        return new SAXSource(filter, source.getInputSource());
+    }
 
     static Document parse(String xml) throws SAXException, IOException {
         try {

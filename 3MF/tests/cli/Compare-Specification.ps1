@@ -24,6 +24,12 @@ $rows = @(Import-Csv (Join-Path $RunDirectory 'results.csv'))
 $inventory = @(Import-Csv (Join-Path $RunDirectory 'inventory.csv'))
 $appendix = Get-SpecificationCases $Specification
 $models = @{}; foreach ($model in $inventory) { $models["$($model.Suite)/$($model.Name)"] = $model }
+$profiled = $summary.PSObject.Properties.Name -contains 'Consumer'
+$consumer = if($profiled){$summary.Consumer}else{'legacy unspecified'}
+$discrepancies=@{}
+foreach($note in (Get-Content (Join-Path $PSScriptRoot 'FixtureDiscrepancies.json') -Raw|ConvertFrom-Json)) {
+    $discrepancies["$($note.Suite)/$($note.Name)"]=$note
+}
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($Specification)
@@ -75,12 +81,14 @@ foreach ($node in $doc.SelectNodes('//w:body/*', $ns)) {
 $comparison = foreach ($row in $rows) {
     $key = "$($row.Suite)/$($row.Name)"
     $scenarioKey = ''; $iteration = ''; $specKey = ''; $expected = $row.Expected
-    $scenario = $null; $review = ''; $iterationText = ''
+    $scenario = $null; $review = ''; $iterationText = ''; $basis='Historical naming-based expectation'; $naming=$expected
     if ($models.ContainsKey($key)) {
         $model = $models[$key]; $specKey = $model.SpecKey
         if ($model.SpecKey -notmatch '^\d+/([PN]_\d{4})_(\d{2})$') { throw "Invalid specification key: $($model.SpecKey)" }
         $scenarioKey = $Matches[1]; $iteration = $Matches[2]
         $expected = if ($scenarioKey.StartsWith('P_')) { 'Accept' } else { 'Reject' }
+        $naming=$expected
+        if($profiled){$policy=Get-ConsumerExpectation $model.SpecKey $consumer; $expected=$policy.Expected; $basis=$policy.Basis}
         if ($expected -ne $row.Expected) { throw "Expectation disagrees with model polarity: $key" }
         if ($catalog.ContainsKey($scenarioKey)) {
             $scenario = $catalog[$scenarioKey]
@@ -94,11 +102,22 @@ $comparison = foreach ($row in $rows) {
             }
             $iterationText = $iterationText.Trim()
         } else { $review = 'Scenario definition not located; naming expectation only.' }
-        if ($scenarioKey -in @('P_0720', 'P_0722', 'P_0740', 'N_2604')) {
+        if ($scenarioKey -in @('P_0720', 'P_0722', 'P_0740', 'N_0208','N_0421','N_2602','N_2604') -or ($scenarioKey -eq 'N_3314' -and $iteration -eq '07')) {
             $review = 'Consumer-specific criteria: printer and viewer/editor expectations can differ. Review scenario and iteration; do not infer full conformance from the filename.'
         }
     }
     $observed = $row.Actual; $evidence = 'Validated XML result'
+    $checkedStatus=$row.Status
+    if($row.Status -in @('Passed','Failed')) {
+        $checked=Test-CliResult $row.Report $row.Name $expected ([bool]$summary.StrictWarnings)
+        $checkedStatus=$checked.Status
+        $observed=$checked.Actual
+        if($profiled -and $checkedStatus -ne 'Error') {
+            $result=Read-SafeXml ([IO.File]::ReadAllText($row.Report))
+            if($result.DocumentElement.GetAttribute('consumer') -ne $consumer){$checkedStatus='Error';$observed=''}
+        }
+        if($checked.Status -eq 'Error'){$evidence='No trustworthy result available'}
+    }
     if ($row.Expected -eq 'Present') { $evidence = 'Missing fixture' }
     elseif ($row.Status -eq 'Error') {
         $evidence = 'No trustworthy result available'
@@ -126,10 +145,18 @@ $comparison = foreach ($row in $rows) {
         }
         $decision = if ($decisionMatches) { 'Matches acceptance expectation' } else { 'Does not match acceptance expectation' }
     }
-    $verified = switch ($row.Status) { 'Passed' { 'Match' } 'Failed' { 'Mismatch' } default { 'Unverifiable' } }
+    $verified = switch ($checkedStatus) { 'Passed' { 'Match' } 'Failed' { 'Mismatch' } default { 'Unverifiable' } }
     if ($row.Expected -eq 'Present') { $verified = 'Missing fixture' }
+    $category=''; $reason=''; $reference=''
+    if($verified -eq 'Mismatch' -and $discrepancies.ContainsKey($key)) {
+        $note=$discrepancies[$key]
+        if($models.ContainsKey($key) -and (Test-Path -LiteralPath $models[$key].Path -PathType Leaf) -and (Get-FileHash -LiteralPath $models[$key].Path -Algorithm SHA256).Hash -eq $note.SHA256 -and $observed -eq $note.Observed) {
+            $category=$note.Category; $reason=$note.Reason; $reference=$note.Reference
+        }
+    }
     [pscustomobject]@{
         Suite = $row.Suite; Test = $row.Name; ScenarioKey = $scenarioKey; Iteration = $iteration
+        Consumer=$consumer; NamingExpectedAcceptance=$naming; ExpectationBasis=$basis
         ExpectedAcceptance = $expected; ObservedCliResult = $observed
         AcceptanceVerification = $verified; ReportedDecisionMatch = $decision; Evidence = $evidence
         AppendixC = $(if ($specKey -and $appendix.ContainsKey($specKey)) { 'Listed' } elseif ($row.Expected -eq 'Present') { 'Listed but missing' } else { 'Not listed; still tested' })
@@ -141,6 +168,7 @@ $comparison = foreach ($row in $rows) {
         DetailedCriteriaReview = $review
         FullCriteriaVerification = 'Not established: CLI acceptance does not verify rendering, selection, printed appearance, or the correctness of the rejection reason.'
         OriginalDiagnostic = $row.Detail; OriginalResult = $row.Status; Report = $row.Report
+        DiscrepancyCategory=$category; DiscrepancyReason=$reason; DiscrepancyReference=$reference
     }
 }
 if (@($comparison).Count -ne $rows.Count) { throw 'Comparison omitted result rows.' }
@@ -151,8 +179,12 @@ $catalog.GetEnumerator() | Sort-Object Key | ForEach-Object {
     [pscustomobject]@{ Key = $_.Key; Heading = $_.Value.Heading; Criteria = $_.Value.Criteria; Iterations = $_.Value.Iterations; Reference = $_.Value.Reference; Normalization = $_.Value.Normalization; ScenarioText = $_.Value.ScenarioText }
 } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'scenario-definitions.json') -Encoding UTF8
 $counts = [ordered]@{
-    Models = $summary.Models; VerifiedAcceptanceMatches = $summary.Passed
-    VerifiedAcceptanceMismatches = $summary.Failed
+    Models = $summary.Models; Consumer=$consumer
+    VerifiedAcceptanceMatches = @($comparison|Where-Object AcceptanceVerification -eq Match).Count
+    VerifiedAcceptanceMismatches = @($comparison|Where-Object AcceptanceVerification -eq Mismatch).Count
+    FixtureDefects = @($comparison|Where-Object DiscrepancyCategory -eq 'Fixture defect').Count
+    SpecificationConflicts = @($comparison|Where-Object DiscrepancyCategory -eq 'Specification conflict').Count
+    UnexplainedMismatches = @($comparison|Where-Object { $_.AcceptanceVerification -eq 'Mismatch' -and -not $_.DiscrepancyCategory }).Count
     UnverifiableModelReports = @($comparison | Where-Object AcceptanceVerification -eq 'Unverifiable').Count
     MissingFixtures = @($comparison | Where-Object AcceptanceVerification -eq 'Missing fixture').Count
     ConsumerSpecificModels = @($comparison | Where-Object { $_.DetailedCriteriaReview -like 'Consumer-specific*' }).Count
@@ -167,24 +199,37 @@ $counts | ConvertTo-Json | Set-Content (Join-Path $out 'summary.json') -Encoding
 $report = [Collections.Generic.List[string]]::new()
 $report.Add('# Specification comparison for the completed CLI run')
 $report.Add('')
-$report.Add('This compares the saved run with the same SHA256-identified v2.4.1 specification, without rerunning Java or changing the original results. Match means acceptance/rejection agrees with the positive/negative expectation in section 5.1. It does not establish full rendering or printer conformance.')
+$report.Add("This compares the saved run with the same SHA256-identified v2.4.1 specification. Consumer: **$consumer**. Expectations use the recorded consumer policy when present; historical runs retain their original naming-based expectations. Original results are unchanged. CLI acceptance does not establish rendering or physical printer conformance.")
 $report.Add('')
 $report.Add('| Models | Expected decision | Matches | Mismatches | Invalid/unverifiable reports |')
 $report.Add('| --- | --- | ---: | ---: | ---: |')
-foreach ($expectation in @('Accept','Reject')) {
-    $selected = @($comparison | Where-Object ExpectedAcceptance -eq $expectation)
-    $label = if ($expectation -eq 'Accept') { 'Positive' } else { 'Negative' }
+foreach ($naming in @('Accept','Reject')) { foreach ($expectation in @('Accept','Reject')) {
+    $selected = @($comparison | Where-Object { $_.NamingExpectedAcceptance -eq $naming -and $_.ExpectedAcceptance -eq $expectation })
+    if(-not $selected.Count){continue}
+    $label = if ($naming -eq 'Accept') { 'Positive' } else { 'Negative' }
     $matchCount = @($selected | Where-Object AcceptanceVerification -eq 'Match').Count
     $mismatchCount = @($selected | Where-Object AcceptanceVerification -eq 'Mismatch').Count
     $unverifiedCount = @($selected | Where-Object AcceptanceVerification -eq 'Unverifiable').Count
     $report.Add("| $label | $expectation | $matchCount | $mismatchCount | $unverifiedCount |")
-}
+} }
 $report.Add('')
-$report.Add("Additionally, $($counts.MissingFixtures) Appendix C fixtures are missing from the checkout. All $($counts.Models) discovered models have scenario definitions linked in expected-vs-observed.csv. The CSV includes the scenario title, verbatim criteria, available iteration text, requirement references, actual result, original diagnostic and evidence quality.")
+$report.Add("Additionally, $($counts.MissingFixtures) Appendix C fixtures are missing from the requested checkout scope. This report covers $($counts.Models) selected models; $($counts.ModelsWithoutScenarioDefinition) lack scenario definitions. The CSV preserves naming expectations alongside consumer expectations, criteria, diagnostics and evidence quality.")
+$report.Add('')
+$report.Add('## Remaining mismatches')
+$report.Add('')
+$report.Add("Of the $($counts.VerifiedAcceptanceMismatches) mismatches, $($counts.FixtureDefects) are fixture defects, $($counts.SpecificationConflicts) are test/format specification conflicts, and $($counts.UnexplainedMismatches) remain unexplained. These categories do not turn failures into passes. Classification requires the exact fixture SHA256 and observed result recorded in FixtureDiscrepancies.json.")
+$report.Add('')
+$report.Add('| Test | Classification | Evidence / action |')
+$report.Add('| --- | --- | --- |')
+foreach($item in $comparison|Where-Object AcceptanceVerification -eq Mismatch){
+    $category=if($item.DiscrepancyCategory){$item.DiscrepancyCategory}else{'Needs investigation'}
+    $reason=if($item.DiscrepancyReason){$item.DiscrepancyReason}else{'Review the diagnostic and scenario in the CSV.'}
+    $report.Add("| $($item.Test) | $category | $reason |")
+}
 $report.Add('')
 $report.Add('## Consumer-specific and manual criteria')
 $report.Add('')
-$report.Add("The $($counts.ConsumerSpecificModels) models in P_0720, P_0722, P_0740 and N_2604 need consumer-specific interpretation. Production Alternatives can require an exception for a printer while permitting a viewer to render; P_0740 iteration 06 expects an exception for both. N_2604 explicitly allows editors to ignore inaccessible content. The CSV flags all of these, without silently changing the existing naming-based totals. Outside these flagged cases there are $($counts.AcceptanceMatchesOutsideConsumerSpecificCases) acceptance matches and $($counts.AcceptanceMismatchesOutsideConsumerSpecificCases) mismatches.")
+$report.Add("The $($counts.ConsumerSpecificModels) selected models have consumer-specific criteria or policy. Printer expectations for P_0722_04 and P_0740_05/06 are Reject, despite positive filenames. A viewer's rendering requirement is distinct from an editor's ability to edit accessible content. Editor policy permits incomplete encrypted content and geometry/interoperability warnings. The CSV records the expectation basis and original naming expectation for every model.")
 $report.Add('')
 $report.Add('Rendering, selected alternative geometry, material/color appearance and physical printing remain unverified. Even a negative case that is rejected can be rejected for an unrelated defect; this comparison does not certify the diagnostic reason. Section 5.3 and the scenario definitions require observations beyond what the CLI reports.')
 $report.Add('')

@@ -5,13 +5,13 @@ param(
     [string]$Javac = 'javac'
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../test_suites' }
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../../test_suites' }
 
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $fixtures = (Resolve-Path -LiteralPath $TestSuiteRoot).Path
 $schema = Join-Path $fixtures 'Consolidated_Schema/Schema'
-$run = Join-Path $PSScriptRoot ('../results/beam-minlength-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$run = Join-Path $PSScriptRoot ('../../results/alternative-references-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $classes = Join-Path $run 'classes'
 [void](New-Item -ItemType Directory -Path $classes -Force)
 $sources = @(Get-ChildItem (Join-Path $project 'src') -Recurse -Filter '*.java' | ForEach-Object { '"' + $_.FullName.Replace('\', '/') + '"' })
@@ -21,19 +21,59 @@ $compiled = Invoke-CliProcess (Get-Command $Javac).Source @('-encoding', 'UTF-8'
 if ($compiled.TimedOut -or $compiled.ExitCode -ne 0) { throw "Compilation failed; see $run/stderr.log" }
 Copy-Item -LiteralPath (Join-Path $project 'src/resources') -Destination $classes -Recurse
 
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
+$positive = Join-Path $fixtures 'suite5_core_prod/positive_test_cases_prod_alt'
+$generated = Join-Path $run 'fixtures'
+[void](New-Item -ItemType Directory -Path $generated)
+
+# Derive focused negative cases from a valid fixture without modifying the checkout.
+function New-AlternativeCase([string]$Name, [scriptblock]$Edit) {
+    $target = Join-Path $generated ($Name + '.3mf')
+    Copy-Item (Join-Path $positive 'P_XPX_0720_01.3mf') $target
+    $zip = [IO.Compression.ZipFile]::Open($target, [IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $entry = $zip.GetEntry('3D/3dmodel.model')
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try { $doc = Read-SafeXml ($reader.ReadToEnd()) } finally { $reader.Dispose() }
+        & $Edit $doc
+        $entry.Delete()
+        $writer = [IO.StreamWriter]::new($zip.CreateEntry('3D/3dmodel.model').Open(), [Text.UTF8Encoding]::new($false))
+        try { $writer.Write($doc.OuterXml) } finally { $writer.Dispose() }
+    } finally { $zip.Dispose() }
+    return $target
+}
+$forward = New-AlternativeCase 'forward-reference' {
+    param($doc)
+    $resources = $doc.SelectSingleNode('//*[local-name()="resources"]')
+    [void]$resources.AppendChild($resources.FirstChild)
+}
+$missing = New-AlternativeCase 'missing-object' {
+    param($doc)
+    $doc.SelectSingleNode('//*[local-name()="alternative"]').SetAttribute('objectid', '999')
+}
+$wrongPart = New-AlternativeCase 'wrong-model' {
+    param($doc)
+    # Object 2 exists locally, but must not satisfy a reference to another model.
+    $doc.SelectSingleNode('//*[local-name()="alternative"]').SetAttribute('path', '/3D/missing.model')
+}
+$nested = New-AlternativeCase 'nested-alternatives' {
+    param($doc)
+    $objects = $doc.SelectNodes('//*[local-name()="object"]')
+    $alternatives = $objects[1].SelectSingleNode('*[local-name()="alternatives"]')
+    [void]$objects[0].AppendChild($alternatives.CloneNode($true))
+}
 $cases = @(
-    foreach ($iteration in 1..3) {
-        @{ Relative = ('suite7_beam/positive_test_cases/P_BXX_2003_{0:d2}.3mf' -f $iteration); Expected = 'Warning'; Code = 'WR_025' }
+    foreach ($iteration in 1..11) {
+        @{ Model = (Join-Path $positive ('P_XPX_0720_{0:d2}.3mf' -f $iteration)); Expected = 'Accept'; Code = '' }
     }
-    @{ Relative = 'suite7_beam/negative_test_cases/N_BXX_2503_03.3mf'; Expected = 'Fail'; Code = 'ER_091' }
-    foreach ($iteration in 1..6) {
-        @{ Relative = ('suite7_beam/negative_test_cases/N_BXX_2502_{0:d2}.3mf' -f $iteration); Expected = 'Fail'; Code = '' }
-    }
-    @{ Relative = 'suite2_core_prod_matl/positive_test_cases/P_XPM_0336_01.3mf'; Expected = 'Accept'; Code = '' }
-    @{ Relative = 'suite5_core_prod/positive_test_cases/P_XPX_0336_01.3mf'; Expected = 'Accept'; Code = '' }
+    @{ Model = $forward; Expected = 'Fail'; Code = 'ER_141' }
+    @{ Model = $missing; Expected = 'Fail'; Code = 'ER_057' }
+    @{ Model = $wrongPart; Expected = 'Fail'; Code = 'ER_057' }
+    @{ Model = $nested; Expected = 'Fail'; Code = 'ER_140' }
 )
 $results = foreach ($case in $cases) {
-    $model = (Resolve-Path -LiteralPath (Join-Path $fixtures $case.Relative)).Path
+    $model = (Resolve-Path -LiteralPath $case.Model).Path
     $name = [IO.Path]::GetFileName($model)
     $work = Join-Path $run ([IO.Path]::GetFileNameWithoutExtension($name))
     [void](New-Item -ItemType Directory -Path $work)
@@ -53,15 +93,12 @@ $results = foreach ($case in $cases) {
         $doc = Read-SafeXml ([IO.File]::ReadAllText($report))
         $issues = @($doc.DocumentElement.SelectNodes('./Issue | ./PrimaryIssue'))
         if ($case.Code -and @($issues | Where-Object { $_.GetAttribute('issueID') -eq $case.Code }).Count -eq 0) { $problems.Add("Missing $($case.Code)") }
-        if ($case.Code -eq 'WR_025') {
-            if ($doc.DocumentElement.FirstChild.GetAttribute('issueID') -ne 'WR_025') { $problems.Add('Short-beam warning was not selected as primary issue') }
-            if (@($issues | Where-Object { $_.GetAttribute('issueID') -ne 'WR_025' -or $_.GetAttribute('severity') -ne 'info' -or $_.GetAttribute('type') -ne 'beam length warning' }).Count) { $problems.Add('Unexpected short-beam diagnostic') }
+        if ($case.Expected -eq 'Accept') {
             $html = [IO.File]::ReadAllText([IO.Path]::ChangeExtension($report, '.html'))
-            if ($html -notmatch 'WR_025' -or $html -match 'ER_091') { $problems.Add('HTML did not report short beams exclusively as warnings') }
+            if ($html -match 'ER_141' -or @($issues | Where-Object { $_.GetAttribute('issueID') -eq 'ER_141' }).Count) { $problems.Add('Spurious alternative forward reference') }
         }
-        if ($name -eq 'N_BXX_2503_03.3mf' -and @($issues | Where-Object { $_.GetAttribute('issueID') -eq 'ER_091' -and $_.InnerText -match 'vertexes set to the same' }).Count -eq 0) { $problems.Add('Missing identical-vertex error') }
     }
-    [pscustomobject]@{ Suite = 'issue2'; Name = $name; Expected = $case.Expected; Actual = $checked.Actual; Status = $(if ($problems.Count) { 'Failed' } else { 'Passed' }); Detail = ($problems -join '; '); Report = $report }
+    [pscustomobject]@{ Suite = 'issue3'; Name = $name; Expected = $case.Expected; Actual = $checked.Actual; Status = $(if ($problems.Count) { 'Failed' } else { 'Passed' }); Detail = ($problems -join '; '); Report = $report }
 }
 $results | Export-Csv (Join-Path $run 'results.csv') -NoTypeInformation -Encoding UTF8
 Write-JUnitReport $results (Join-Path $run 'junit.xml')

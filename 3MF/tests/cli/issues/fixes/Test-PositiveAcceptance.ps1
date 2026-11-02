@@ -2,9 +2,9 @@
 param([string]$TestSuiteRoot, [string]$Java = 'java', [string]$Javac = 'javac',
     [ValidateRange(1, 3600)][int]$TimeoutSeconds = 1200, [string[]]$FixtureName)
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../Conformance.ps1')
-if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../test_suites' }
-$project = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+. (Join-Path $PSScriptRoot '../../Conformance.ps1')
+if (-not $TestSuiteRoot) { $TestSuiteRoot = Join-Path $PSScriptRoot '../../../../../../test_suites' }
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
 $fixtures = (Resolve-Path -LiteralPath $TestSuiteRoot).Path
 $run = Join-Path $project ('tests/cli/results/positive-acceptance-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $classes = Join-Path $run 'classes'
@@ -22,7 +22,7 @@ Copy-Item (Join-Path $run 'stdout.log') (Join-Path $run 'model-schema.log')
 if ($helper.TimedOut -or $helper.ExitCode -ne 0) { throw "Model-schema helper failed: $run/stderr.log" }
 $names = @('P_SPX_0102_03', 'P_SXX_0102_03', 'P_SPX_0104_04', 'P_SXX_0104_04', 'P_XXX_2202_04',
     'P_EPX_0740_01', 'P_EPX_0740_02', 'P_EPX_0740_03', 'P_EPX_0740_04', 'P_EPX_0740_05', 'P_EPX_0740_06',
-    'P_SPX_0909_01', 'P_SXX_0909_01', 'P_XXX_0101_01', 'P_SPX_0101_01', 'P_SXX_0101_01', 'P_XPM_0101_01')
+    'P_SPX_0909_01', 'P_SXX_0909_01', 'P_XXX_0101_01', 'P_SPX_0101_01', 'P_SXX_0101_01', 'P_XPM_0101_01', 'P_XPX_0722_02')
 if ($FixtureName) { $names = $FixtureName }
 $models = @(Get-ChildItem $fixtures -Recurse -Filter '*.3mf' | Where-Object BaseName -in $names)
 if ($models.Count -ne $names.Count) { throw 'Missing or duplicate issue fixture/control' }
@@ -34,6 +34,7 @@ $mutations = @(
     @{ Name = 'missing-production-object-uuid'; Source = 'P_SPX_0101_01'; Pattern = '(<object\b[^>]*?)\s+p:UUID="[^"]*"'; Replacement = '$1'; Expected = 'Fail'; Code = 'SC_000' }
     @{ Name = 'missing-production-item-uuid'; Source = 'P_SPX_0101_01'; Pattern = '(<item\b[^>]*?)\s+p:UUID="[^"]*"'; Replacement = '$1'; Expected = 'Fail'; Code = 'SC_000' }
     @{ Name = 'unqualified-attribute'; Source = 'P_XXX_2202_04'; Pattern = 'ww:unrecognized='; Replacement = 'unrecognized='; Expected = 'Fail'; Code = 'SC_000' }
+    @{ Name = 'mixed-case-override-invalid-schema'; Source = 'P_SPX_0102_01'; Pattern = '<object\b'; Replacement = '<object unrecognized="yes"'; Expected = 'Fail'; Code = 'SC_000' }
     @{ Name = 'foreign-prefix-alias'; Source = 'P_XXX_2202_04'; Pattern = 'ww:'; Replacement = 'alias:'; Expected = 'Pass'; Code = '' }
     @{ Name = 'declared-unused-production'; Source = 'P_XXX_0101_01'; Pattern = '<model\b'; Replacement = '<model xmlns:unused="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"'; Expected = 'Pass'; Code = '' }
     @{ Name = 'malformed-optional-uuid'; Source = 'P_XXX_0101_01'; Pattern = '<object\b'; Replacement = '<object xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" p:UUID="invalid"'; Expected = 'Fail'; Code = 'SC_000' }
@@ -54,7 +55,7 @@ if (-not $FixtureName) { foreach ($mutation in $mutations) {
         $stream = [IO.MemoryStream]::new()
         $input = $entry.Open()
         try { $input.CopyTo($stream); $bytes = $stream.ToArray() } finally { $input.Dispose(); $stream.Dispose() }
-        if ($entryName -match '\.(model|rels|xml)$' -and $bytes.Length -gt 0 -and $bytes[0] -eq 60) {
+        if ($entryName -match '\.(model|moodel|rels|xml)$' -and $bytes.Length -gt 0 -and $bytes[0] -eq 60) {
             $text = [Text.Encoding]::UTF8.GetString($bytes)
             $updated = [regex]::Replace($text, $mutation.Pattern, $mutation.Replacement)
             if ($mutation.Name -eq 'foreign-prefix-alias') { $updated = $updated.Replace('xmlns:ww=', 'xmlns:alias=') }
@@ -77,13 +78,14 @@ $results = foreach ($model in $models) {
     $modes = @('auto')
     if ($model.BaseName -eq 'P_XXX_0101_01') { $modes += 'strict' }
     if ($model.BaseName -in @('P_SPX_0102_03', 'P_SXX_0102_03', 'P_XXX_2202_04')) { $modes += 'structure' }
-    if ($model.BaseName -eq 'P_EPX_0740_01') { $modes += @('schema', 'structure', 'hidden') }
+    if ($model.BaseName -in @('P_EPX_0740_01','P_XPX_0722_02')) { $modes += @('schema', 'structure', 'hidden') }
     foreach ($mode in $modes) {
         $work = Join-Path $run ($model.BaseName + '-' + $mode)
         [void](New-Item -ItemType Directory -Path $work)
         foreach ($folder in @('ztmp', 'imagetmp', 'zips')) { [void](New-Item -ItemType Directory -Path (Join-Path $work $folder)) }
         @(('pschemaLoc = "' + (Join-Path $fixtures 'Consolidated_Schema/Schema').Replace('\', '/') + '"'), 'iErrMaxStructure = "100"', 'iErrMaxValidataion = "100"') | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
         'pNoUUIDchk = "false"' | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+        'validationConsumer = "editor"' | Add-Content (Join-Path $work '3MF.ini') -Encoding ASCII
         $options = @('-I'); if ($mode -eq 'structure') { $options = @('-S') }
         if ($mode -eq 'schema') { $options = @('-V') }
         if ($mode -eq 'hidden') { $options += '-W' }
@@ -94,6 +96,7 @@ $results = foreach ($model in $models) {
         if ($model.BaseName -match '^P_[SE]PX_0909_|^P_SXX_0909_') { $expected = 'Fail'; $requiredCode = 'ER_132' }
         if ($model.BaseName -match '^P_[SE]PX_0104_04|^P_SXX_0104_04') { $expected = 'Warning'; $requiredCode = 'WR_030' }
         if ($model.BaseName -like 'P_EPX_0740_*') { $expected = 'Warning'; $requiredCode = 'WR_031' }
+        if ($model.BaseName -eq 'P_XPX_0722_02') { $expected = 'Warning'; $requiredCode = 'WR_032' }
         if ($generatedCases.ContainsKey($model.BaseName)) { $expected = $generatedCases[$model.BaseName].Expected; $requiredCode = $generatedCases[$model.BaseName].Code }
         $checked = Test-CliResult $report $model.Name $(if ($expected -eq 'Fail') { 'Reject' } else { 'Accept' })
         if ($checked.Actual -and $checked.Actual -ne $expected) { $checked.Status = 'Failed'; $checked.Detail = "Expected $expected; got $($checked.Actual). " + $checked.Detail }
@@ -118,9 +121,12 @@ if (-not $FixtureName) {
     foreach ($folder in @('ztmp', 'imagetmp', 'zips')) { [void](New-Item -ItemType Directory -Path (Join-Path $work $folder)) }
     @(('pschemaLoc = "' + (Join-Path $fixtures 'Consolidated_Schema/Schema').Replace('\', '/') + '"'), 'iErrMaxStructure = "100"', 'iErrMaxValidataion = "100"') | Set-Content (Join-Path $work '3MF.txt') -Encoding ASCII
     'pNoUUIDchk = "false"' | Set-Content (Join-Path $work '3MF.ini') -Encoding ASCII
+    'validationConsumer = "editor"' | Add-Content (Join-Path $work '3MF.ini') -Encoding ASCII
     $batch = @(
         @{ Path = (Join-Path $generated 'missing-production-item-uuid.3mf'); Expected = 'Fail' }
         @{ Path = ($models | Where-Object BaseName -eq 'P_EPX_0740_01' | Select-Object -First 1 -ExpandProperty FullName); Expected = 'Warning' }
+        @{ Path = ($models | Where-Object BaseName -eq 'P_XPX_0722_02' | Select-Object -First 1 -ExpandProperty FullName); Expected = 'Warning' }
+        @{ Path = (Join-Path $fixtures 'suite2_core_prod_matl/negative_test_cases/N_XPM_0428_01.3mf'); Expected = 'Fail' }
         @{ Path = $core; Expected = 'Pass' }
     )
     foreach ($case in $batch) { if (-not (Test-Path -LiteralPath $case.Path)) { throw "Missing mixed-batch fixture: $($case.Path)" } }

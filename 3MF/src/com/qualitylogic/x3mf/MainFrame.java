@@ -247,6 +247,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	private Map<String, String> contentType = new HashMap<String, String>();
 	private Map<String, String> contentOverrides = new HashMap<String, String>();
 	private boolean packageProduction;
+	private ValidationConsumer validationConsumer = ValidationConsumer.PRINTER;
+	private String packageRootPart;
 	private String fxmlSchemaWarnings = "";
 
 	private String fxmlSchemaReturn = "";
@@ -994,6 +996,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					}
 				}
 				fxmlWarningReturn += fxmlSchemaWarnings;
+				if (!fxmlSchemaReturn.isEmpty()) pf = "Fail";
 				if (pf.equals("Pass") && !fxmlWarningReturn.isEmpty()) pf = "Warning";
 				String addIssue = "";
 				if(!fxmlSchemaReturn.equals("")){
@@ -1059,7 +1062,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					}
 				}
 				String xout = "<?xml version=\"1.0\" encoding=\"UTF-8\"  standalone=\"no\"?>";
-				xout += "<TestResult file=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeXml10(selectedFile.getName()) + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
+				xout += "<TestResult consumer=\"" + validationConsumer.setting() + "\" file=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeXml10(selectedFile.getName()) + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
 				xout += fxmlSchemaReturn + fxmlErrorReturn + fxmlWarningReturn;
 				xout +="</TestResult>";
 				String xmlResult = formatXmlString(xout);
@@ -1141,6 +1144,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 							}
 						}
 						fxmlWarningReturn += fxmlSchemaWarnings;
+						if (!fxmlSchemaReturn.isEmpty()) pf = "Fail";
 						if (pf.equals("Pass") && !fxmlWarningReturn.isEmpty()) pf = "Warning";
 						String addIssue = "";
 						if(!fxmlSchemaReturn.equals("")){
@@ -1203,7 +1207,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 							}
 						}
 						String xout = "<?xml version=\"1.0\" encoding=\"UTF-8\"  standalone=\"no\"?>";
-						xout += "<TestResult file=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeXml10(selectedFile.getName()) + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
+						xout += "<TestResult consumer=\"" + validationConsumer.setting() + "\" file=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeXml10(selectedFile.getName()) + "\" dateTime=\"" + szTime + "\" result=\"" + pf + "\">";
 						xout += fxmlSchemaReturn + fxmlErrorReturn + fxmlWarningReturn;
 						xout +="</TestResult>";
 						String xmlResult = formatXmlString(xout);
@@ -2773,6 +2777,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	//unzip a 3mf
 	private void unzip3mf(){
 		packageProduction = false;
+		packageRootPart = null;
 		//clear zips/temp
 		try {
 			File ztmp = new File("ztmp");
@@ -2801,9 +2806,17 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	//check the schema for all xml files in the zip
 	private void chkSchZip(){
 		try{
+			java.util.Set<String> unsupportedAlternatives = null;
 			bChkError = false;
 			fxmlSchemaWarnings = "";
 			saveForConsole="";
+			ModelRules consumerRules = validationConsumer == ValidationConsumer.PRINTER ? new ModelRules((code, warning, message) -> {
+				String issue = "<Issue issueID=\"" + code + "\" severity=\"" + (warning ? "info" : "high") + "\" class=\"consumer\" type=\"printer representation\">"
+						+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10(message) + "</Issue>";
+				if (warning) fxmlSchemaWarnings += issue;
+				else { bChkError = true; fxmlSchemaReturn += issue; }
+				saveForConsole += "<br>" + code + ": " + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(message);
+			}, validationConsumer) : null;
 			File file = new File("ztmp");
 			Collection<File> files = FileUtils.listFiles(file,TrueFileFilter.TRUE, TrueFileFilter.TRUE);
 			File[] listOfFiles = files.toArray(new File[files.size()]);
@@ -2872,7 +2885,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						}
 					}
 					if (unzipped.startsWith("%3McF")) {
-						if (!fxmlSchemaWarnings.isEmpty()) continue;
+						if (consumerRules != null) consumerRules.unavailable(partName);
+						if (fxmlSchemaWarnings.contains("WR_031")) continue;
 						String message = "Validation incomplete: encrypted part " + partName + " could not be decrypted; rendering/printing and alternative selection were not evaluated.";
 						fxmlSchemaWarnings += "<Issue issueID=\"WR_031\" severity=\"info\" class=\"schema\" type=\"encrypted content\">"
 								+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10(message) + "</Issue>";
@@ -2883,10 +2897,30 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 				}
 				if(unzipped.startsWith("<?xml") || ((modelPart || (type.isEmpty() && f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".model")))
 						&& !unzipped.startsWith("%3McF"))){
+					boolean unsupportedRequired = false;
+					if (unzipped.contains("requiredextensions")) try { unsupportedRequired = ModelSchema.unsupportedRequired(unzipped); }
+					catch (SAXException | IOException ex) { /* The validator below must report malformed XML. */ }
+					if (unsupportedRequired) {
+						if (unsupportedAlternatives == null) try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(currentFile)) {
+							unsupportedAlternatives = AlternativePolicy.skippedParts(archive, validationConsumer);
+						}
+						if (unsupportedAlternatives.contains(partName)) {
+							if (consumerRules != null) consumerRules.unavailable(partName);
+							String message = "Unsupported alternative " + partName + " was skipped; a supported " + (validationConsumer == ValidationConsumer.PRINTER ? "full-resolution " : "") + "representation is available. Rendering/printing was not evaluated.";
+							fxmlSchemaWarnings += "<Issue issueID=\"WR_032\" severity=\"info\" class=\"schema\" type=\"unsupported alternative\">"
+									+ org.apache.commons.lang3.StringEscapeUtils.escapeXml10(message) + "</Issue>";
+							saveForConsole += "<br>WR_032: " + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(message);
+							continue;
+						}
+					}
 					boolean chk = xmlValidCon(unzipped,partName);
 					if(!chk) bChkError = true;
+					if (consumerRules != null && (modelPart || (type.isEmpty() && f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".model"))))
+						try { consumerRules.addConsumerModel(unzipped, partName); }
+						catch (SAXException | IOException ex) { /* xmlValidCon already reports malformed XML. */ }
 				}
 			}
+			if (consumerRules != null) consumerRules.finishConsumer(packageRootPart);
 			System.gc();
 			addToConsole(saveForConsole);
 		}catch (Exception ex){
@@ -2904,6 +2938,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		}
 		try{
 			nfsc = new FileStructureCheck();
+			nfsc.consumer = validationConsumer;
 			nfsc.fCurrentFile = currentFile;
 			nfsc.fSchemaLoc = schemaLoc;
 			nfsc.iErrMaxStr = iErrMaxS;
@@ -2911,6 +2946,9 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			nfsc.checkFile();
 			reportStructureResult(nfsc);
 		}catch (Exception e){
+			if (nfsc == null) nfsc = new FileStructureCheck();
+			nfsc.unexpectedFailure(e);
+			reportStructureResult(nfsc);
 			e.printStackTrace();
 		}finally{
 			if (glassPane != null) {
@@ -2992,6 +3030,8 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		getPropDat();
 		//The ini has values like the screen sizing
 		inDat.readIni();
+		validationConsumer = StartUp.consumerOverride == null ? inDat.validationConsumer : StartUp.consumerOverride;
+		logger.info("Validation consumer: " + validationConsumer.setting());
 		if (!StartUp.brunCli) setDarkMode(inDat.darkMode);
 		scrSzHgt = inDat.pscrSzHgt;
 		scrSzWid = inDat.pscrSzWid;
@@ -3172,7 +3212,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 	private String effectiveContentType(String name) {
 		String path = name.replace('\\', '/');
 		if (!path.startsWith("/")) path = "/" + path;
-		String type = contentOverrides.get(path);
+		String type = contentOverrides.get(path.toLowerCase(java.util.Locale.ROOT));
 		if (type != null) return type;
 		int dot = path.lastIndexOf('.');
 		type = dot < 0 ? null : contentType.get(path.substring(dot + 1).toLowerCase(java.util.Locale.ROOT));
@@ -3191,6 +3231,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						|| "External".equals(link.getAttribute("TargetMode"))) continue;
 				String part = GeometryCheck.part("/", link.getAttribute("Target").trim());
 				if (part == null) continue;
+				packageRootPart = part;
 				File root = new File("ztmp" + part);
 				if (root.isFile() && root.length() <= 200000000)
 					packageProduction |= ModelSchema.usesProduction(FileUtils.readFileToString(root, "UTF-8"));
@@ -3237,7 +3278,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						contentType.put(ext.toLowerCase(java.util.Locale.ROOT),typ.trim());
 					} else if ("Override".equals(node.getLocalName())) {
 						org.w3c.dom.Element override = (org.w3c.dom.Element)node;
-						contentOverrides.put(override.getAttribute("PartName"), override.getAttribute("ContentType").trim());
+						contentOverrides.put(override.getAttribute("PartName").toLowerCase(java.util.Locale.ROOT), override.getAttribute("ContentType").trim());
 					}
 				}
 			}
@@ -3254,7 +3295,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 		//
 		boolean outXml=false;
 		String uWarn = "";
-		int schemaErrorCount = 0;
 		try {
 			if(schemaLoc.length()<1){
 				getSchemaLoc();
@@ -3285,7 +3325,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xsdErrorList.clear();
 			schemaValidator.setErrorHandler(new XSDValidationLoggingErrorHandler()); 
 			// validate xml instance against the grammar. 
-			schemaValidator.validate(SafeXml.source(tmp));
+			schemaValidator.validate(ModelSchema.validationSource(tmp));
 			boolean bWarnUUID = false;
 			uWarn = "";
 			if(bNoUUIDchk.isSelected()){
@@ -3318,10 +3358,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 				if(xsdErrorList.size() > iErrMaxV){
 					List<String> errList = new ArrayList<String>();
 					for (SAXParseException saxParseException : xsdErrorList) {
-						if(saxParseException.getMessage().contains("Invalid content was found starting with element") && 
-						   !saxParseException.getMessage().split("}")[0].contains("http://schemas.microsoft.com/3dmanufacturing/")) {
-								schemaErrorCount++;
-						}
 						errList.add(saxParseException.getMessage() + "|" + saxParseException.getLineNumber());
 					}
 					xsdErrorText.append("<br>Found " + Integer.toString(xsdErrorList.size()) 
@@ -3350,10 +3386,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					ict = 0;
 					String sError="";
 					for (SAXParseException saxParseException : xsdErrorList) { 
-						if(saxParseException.getMessage().contains("Invalid content was found starting with element") && 
-								   !saxParseException.getMessage().split("}")[0].contains("http://schemas.microsoft.com/3dmanufacturing/")) {
-							schemaErrorCount++;
-						}
 						ict++;
 						if(ict>iErrMaxV)sError = "<br>More than " + Integer.toString(iErrMaxV) + " errors found, exiting.";
 						xsdErrorText.append("line: ") 
@@ -3370,20 +3402,9 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						}
 					} 
 				}
-				if(xsdErrorList.size() == schemaErrorCount) {
-					xsdErrorText.append("</font>");
-					if(!bdoWarn) {
-						String errorText = xsdErrorText.toString().replace("color='red'", "color='DAA520'");
-						addToConsole(errorText);
-						outXml=true;
-						return outXml;
-					}
-					outXml=true;
-				}else {
-					xsdErrorText.append("</font>");
-					addToConsole(uWarn + xsdErrorText.toString());
-					return false;
-				}
+				xsdErrorText.append("</font>");
+				addToConsole(uWarn + xsdErrorText.toString());
+				return false;
 			} else { 
 				outXml=true;
 			}
@@ -3416,7 +3437,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 				return true;
 			}
 		}
-		int schemaErrorCount = 0;
 		boolean outXml=false;
 		try {
 			if(schemaLoc.length()<1){
@@ -3449,7 +3469,7 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 			xsdErrorList.clear();
 			schemaValidator.setErrorHandler(new XSDValidationLoggingErrorHandler()); 
 			// validate xml instance against the grammar. 
-			schemaValidator.validate(SafeXml.source(tmp));
+			schemaValidator.validate(ModelSchema.validationSource(tmp));
 			boolean bWarnUUID = false;
 			if(bNoUUIDchk.isSelected()){
 				xsdErrorListRm.clear();
@@ -3482,10 +3502,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					List<String> errList = new ArrayList<String>();
 					for (SAXParseException saxParseException : xsdErrorList) {
 						errList.add(saxParseException.getMessage() + "|" + saxParseException.getLineNumber());
-						if(saxParseException.getMessage().contains("Invalid content was found starting with element") && 
-								   !saxParseException.getMessage().split("}")[0].contains("http://schemas.microsoft.com/3dmanufacturing/")) {
-							schemaErrorCount++;
-						}
 					}	
 					xsdErrorText.append("<br>Found " + Integer.toString(xsdErrorList.size()) 
 					+ " errors. Using the short, grouped form.<br>");
@@ -3521,11 +3537,6 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 					ict = 0;
 					String sError="";
 					for (SAXParseException saxParseException : xsdErrorList) { 
-						if (saxParseException.getMessage().contains(
-								"Invalid content was found starting with element") && 
-								   !saxParseException.getMessage().split("}")[0].contains("http://schemas.microsoft.com/3dmanufacturing/")) {
-							schemaErrorCount++;
-						}
 						ict++;
 						if(ict>iErrMaxV)sError = "<br>More than " + Integer.toString(iErrMaxV) + " errors found, exiting.";
 						xsdErrorText.append("line: ") 
@@ -3543,18 +3554,9 @@ public class MainFrame extends JPanel implements ActionListener, DocumentListene
 						}
 					} 
 				}
-				if(xsdErrorList.size() == schemaErrorCount) {
-					xsdErrorText.append("</font>");
-					if(!bdoWarn) {
-						String errorText = xsdErrorText.toString().replace("color='red'", "color='DAA520'");
-						saveForConsole += errorText;
-					}
-					outXml=true;
-				}else {
-					xsdErrorText.append("</font>");
-					saveForConsole += xsdErrorText.toString();
-					return false;
-				}
+				xsdErrorText.append("</font>");
+				saveForConsole += xsdErrorText.toString();
+				return false;
 			} else { 
 				outXml=true;
 			}
