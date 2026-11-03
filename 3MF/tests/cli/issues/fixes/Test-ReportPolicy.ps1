@@ -10,6 +10,8 @@ $run=Join-Path $project ('tests/cli/results/report-policy-'+(Get-Date -Format 'y
 [void](New-Item -ItemType Directory -Path $run)
 $checks=0
 foreach($probe in @(
+    @('5/P_0720_03','printer','Reject'),@('5/P_0720_03','editor','Accept'),
+    @('5/P_0720_02','printer','Accept'),@('5/P_0720_04','printer','Accept'),
     @('5/P_0722_04','printer','Reject'),@('5/P_0740_05','printer','Reject'),@('5/P_0740_06','printer','Reject'),
     @('5/P_0722_04','editor','Accept'),@('5/P_0740_06','editor','Accept'),@('8/N_2604_01','editor','Accept'),
     @('8/N_2602_01','printer','Reject'),@('8/N_2602_01','editor','Accept'),@('2/N_0421_01','editor','Accept'),

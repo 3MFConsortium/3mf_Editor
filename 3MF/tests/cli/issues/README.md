@@ -5,6 +5,67 @@ The general conformance tools stay in `tests/cli/`, and their self-test remains
 at `tests/cli/issues/Test-Runner.ps1`. Run the commands below from the project
 directory; generated reports still go to `tests/cli/results/`.
 
+## Issue #25: non-secure alternatives printer expectation
+
+`P_XPX_0720_03.3mf` must reject in printer mode and accept in viewer/editor
+mode. Test specification v2.4.1 maps iteration 03 to `Alt_03`: an obfuscated
+primary object and a low-resolution alternative, with a printer-colored
+`Exception` in the combination table. The scenario prose repeats
+"01 through 03" ambiguously; the iteration mapping and table identify 03 as
+the exception. The unchanged fixture agrees: build object
+`/3D/3dmodel.model#1` is obfuscated, its lowres alternative references root
+object 4, and that object's component references lowres
+`/3D/nonroot.model#6`. There is no full-resolution representation to print.
+
+The validator already implements this distinction correctly. The conformance
+expectation now requires printer rejection while retaining `NamingExpected =
+Accept` in the inventory. `ER_203` remains the primary printer diagnostic;
+editor mode accepts the fixture. The existing alternative-reference regression
+also expects this printer rejection, and report-policy controls cover the
+exception, editor acceptance and neighboring valid iterations.
+
+Run the focused regression from the project directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-Issue25Alternatives.ps1
+```
+
+It accepts `-TestSuiteRoot` and `-Specification` overrides, compiles fresh sources,
+and checks all eleven `P_XPX_0720` fixtures in both profiles with strict UUIDs,
+schema/structure validation and one model per process. It verifies the original
+naming expectation, consumer identity, primary `ER_203`, JUnit counts and the
+specification comparison. It does not perform rendering or printing.
+
+Verified on 2026-11-03: all 22 CLI checks pass, with zero failures, errors or
+specification-comparison mismatches. Results, per-profile XML/JUnit reports and
+comparison reports are in
+`tests/cli/results/issue25-20261103-163741-423761d9/`. There are no missing selected
+Appendix C fixtures; `0720_01` is an additional checkout model absent from that
+appendix and is tested explicitly. Four focused policy controls and all 30
+harness assertions also pass.
+
+The affected reference regression also passes all 15 cases:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/fixes/Test-AlternativeReferences.ps1
+```
+
+Its evidence is in
+`tests/cli/results/alternative-references-20261103-163859-814dba51/`.
+The profile runs completed successfully despite a sandbox compiler cleanup
+access exception; a separate compilation outside the sandbox with Java 8 API
+targeting passed (only obsolete-option warnings), as did the reference regression
+outside the sandbox. The clean compiler log is
+`tests/cli/results/issue25-input/clean-compile.log`.
+
+The local Word specification was locked, so the run used an ignored copy
+downloaded from fixture commit `a63f4bf07c4ab287c8f84f1cdeab8ee92333a577`.
+Its SHA256 is
+`614D900FD123C6331FDCFA32C88D3F56590A9F393DC0801D3FD95FA2CEDC9752`, matching
+the issue's specification. The official fixture checkout was not changed.
+The new regression script is not Git-ignored; generated evidence is ignored.
+No GitHub comment or issue closure was posted.
+
 ## JDK 8 Actions compilation failure
 
 The [failed Code Validation run](https://github.com/3MFConsortium/3mf_Editor/actions/runs/41414097211)

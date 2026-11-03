@@ -65,7 +65,8 @@ $nested = New-AlternativeCase 'nested-alternatives' {
 }
 $cases = @(
     foreach ($iteration in 1..11) {
-        @{ Model = (Join-Path $positive ('P_XPX_0720_{0:d2}.3mf' -f $iteration)); Expected = 'Accept'; Code = '' }
+        # Alt_03 has only obfuscated/lowres representations: printer must reject it.
+        @{ Model = (Join-Path $positive ('P_XPX_0720_{0:d2}.3mf' -f $iteration)); Expected = $(if ($iteration -eq 3) { 'Fail' } else { 'Accept' }); Code = $(if ($iteration -eq 3) { 'ER_203' } else { '' }) }
     }
     @{ Model = $forward; Expected = 'Fail'; Code = 'ER_141' }
     @{ Model = $missing; Expected = 'Fail'; Code = 'ER_057' }

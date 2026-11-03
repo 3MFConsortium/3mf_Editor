@@ -90,7 +90,8 @@ function Get-ConsumerExpectation([string]$SpecKey, [string]$Consumer) {
     $naming=if($polarity -eq 'P'){'Accept'}else{'Reject'}
     $expected=$naming; $basis='Section 5.1 positive/negative acceptance convention'
     if($Consumer -eq 'printer' -and $polarity -eq 'P' -and
-        (($scenario -eq '0722' -and $iteration -eq '04') -or ($scenario -eq '0740' -and $iteration -in @('05','06')))) {
+        (($scenario -eq '0720' -and $iteration -eq '03') -or
+         ($scenario -eq '0722' -and $iteration -eq '04') -or ($scenario -eq '0740' -and $iteration -in @('05','06')))) {
         $expected='Reject'; $basis='Scenario iteration explicitly requires a printer exception'
     }
     if($Consumer -eq 'editor' -and $polarity -eq 'N' -and
