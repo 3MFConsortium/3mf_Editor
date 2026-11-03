@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "3MF Editor",
+            "request": "launch",
+            "mainClass": "com.qualitylogic.x3mf.StartUp",
+            "projectName": "3MF",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        }
+    ]
+}

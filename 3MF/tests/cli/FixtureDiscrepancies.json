@@ -1,0 +1,200 @@
+﻿[
+    {
+        "Suite":  1,
+        "Name":  "N_SPX_0208_01.3mf",
+        "SHA256":  "10139917E4EA7D4E7CAD42E772AD65EC7BBC4B0C17BE58C2581869CA89279C1F",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  1,
+        "Name":  "N_SPX_0416_03.3mf",
+        "SHA256":  "BD8B6527E68F48CF3D38D5E210E25EEF66925B6740A4F36F9A8E7442D1485766",
+        "Category":  "Fixture defect",
+        "Reason":  "The inverted fallback mesh is not authoritative: required slices define the printed geometry. Rejecting the fallback would invalidate legitimate sliced models.",
+        "Observed":  "Pass",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  1,
+        "Name":  "P_SPX_0909_01.3mf",
+        "SHA256":  "E3AA9E29F4C7D2F21482C5965FC551EAE97120B84D838533D033394F6CDF7AB1",
+        "Category":  "Fixture defect",
+        "Reason":  "Positive fixture uses bare filenames in Override PartName instead of absolute part URIs. The matching ZIP parts reside under /2D/.",
+        "Observed":  "Fail",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  1,
+        "Name":  "P_SPX_0915_01.3mf",
+        "SHA256":  "7348D248DFACE84EA594D18DA371CFFE3D95DA1E2813FF2AC86C2A09DD29AC2E",
+        "Category":  "Fixture defect",
+        "Reason":  "Positive fixture crosses slice relationship targets between midway.model and midway2.model. Required slicepath targets are not registered by their source model relationships.",
+        "Observed":  "Fail",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  1,
+        "Name":  "P_SPX_1514_02.3mf",
+        "SHA256":  "C2C9A88F33F88A29F8A243646F2FDFCC139E0F7211629055CB2C309B32309237",
+        "Category":  "Fixture defect",
+        "Reason":  "Positive fixture crosses slice relationship targets between midway.model and midway2.model. Required slicepath targets are not registered by their source model relationships.",
+        "Observed":  "Fail",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  2,
+        "Name":  "N_XPM_0208_01.3mf",
+        "SHA256":  "F1495FDFCB3419DE50BBC1E6F26316A854F649028EAA2BF0B3C81504D78248B0",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  2,
+        "Name":  "N_XPM_0208_02.3mf",
+        "SHA256":  "DED66B9BDD0662DD529487B56E6E44160E0DF550B26FF3A09A5469172B34AC76",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  2,
+        "Name":  "N_XPM_0416_02.3mf",
+        "SHA256":  "F1BEA2DB83497D188FAD720CEFE488D67F3B1CC8759AA32A60663DC0D5497431",
+        "Category":  "Specification conflict",
+        "Reason":  "Mirroring must preserve volume sign under Core 1.3. A negative determinant alone is not a rejection condition.",
+        "Observed":  "Pass",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  3,
+        "Name":  "N_XXX_0208_01.3mf",
+        "SHA256":  "F7201FC962C5829C1FFD85A9BD5C8FE134861A2658B12EAF61B585FB314EE868",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  3,
+        "Name":  "N_XXX_0416_02.3mf",
+        "SHA256":  "2827F6A0DE8F7A3C0ED0D611A0A0675BD24F8D74EACD9F5C24A4B6E48B602070",
+        "Category":  "Specification conflict",
+        "Reason":  "Mirroring must preserve volume sign under Core 1.3. A negative determinant alone is not a rejection condition.",
+        "Observed":  "Pass",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  3,
+        "Name":  "N_XXX_0420_01.3mf",
+        "SHA256":  "E3781F62D35896A4FBB9F5313E578DFA95C9884698607067ACC4FCF37E831C6B",
+        "Category":  "Fixture defect",
+        "Reason":  "The archive does not contain the DOCTYPE described by this negative scenario. The intended DTD violation cannot be tested.",
+        "Observed":  "Pass",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  4,
+        "Name":  "N_SXX_0208_01.3mf",
+        "SHA256":  "9000C6B82D89B1F50CAB0B4FF36F67F840AC7234FFC45BC09F5ADD3A7C9391E7",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  4,
+        "Name":  "N_SXX_0416_03.3mf",
+        "SHA256":  "ED5D09EAAF78E14D20665EB3053B62FD40A4F7DDDCB14F11A2A956BEA0203901",
+        "Category":  "Fixture defect",
+        "Reason":  "The inverted fallback mesh is not authoritative: required slices define the printed geometry. Rejecting the fallback would invalidate legitimate sliced models.",
+        "Observed":  "Pass",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  4,
+        "Name":  "P_SXX_0909_01.3mf",
+        "SHA256":  "24AE2C245202BA028E2A07523B29DB090408B223DA1A0B07B96C510524E350FE",
+        "Category":  "Fixture defect",
+        "Reason":  "Positive fixture uses bare filenames in Override PartName instead of absolute part URIs. The matching ZIP parts reside under /2D/.",
+        "Observed":  "Fail",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  5,
+        "Name":  "N_XPX_0208_01.3mf",
+        "SHA256":  "01A656BA2816ED382B7BD6B9A03F2F614913D7371DB0623A0145B2B0FDC4FFE2",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  5,
+        "Name":  "N_XPX_0416_02.3mf",
+        "SHA256":  "CCEF596D2F1329DE346ADD74649BFE992D36F5E83208A4223096C1FAFB0B47D9",
+        "Category":  "Specification conflict",
+        "Reason":  "Mirroring must preserve volume sign under Core 1.3. A negative determinant alone is not a rejection condition.",
+        "Observed":  "Pass",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  5,
+        "Name":  "N_XPX_0420_01.3mf",
+        "SHA256":  "00454EEF3C3F1B25F23C3117AD554C8573B39D10CDF2CEF6242778891C0E1242",
+        "Category":  "Fixture defect",
+        "Reason":  "The archive does not contain the DOCTYPE described by this negative scenario. The intended DTD violation cannot be tested.",
+        "Observed":  "Pass",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  6,
+        "Name":  "N_XXM_0208_01.3mf",
+        "SHA256":  "6CCAAF5CD3CD49B2AE304ABEC07745EFF9B4CC022D5D090A78CC27B2437E81CD",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  6,
+        "Name":  "N_XXM_0208_02.3mf",
+        "SHA256":  "B26E0EAD1B55AEEB2A22CAABB9B8D313F2FAD9D343CBF3957A8926115715DF5E",
+        "Category":  "Specification conflict",
+        "Reason":  "Test specification expects printer rejection for raw Unicode names, while Core 1.3 recommends URI encoding with SHOULD. Warning preserves Unicode support; P_SPX_0104_04 also contains such a name.",
+        "Observed":  "Warning",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  6,
+        "Name":  "N_XXM_0416_02.3mf",
+        "SHA256":  "50E9056D2A8D7C6EFFBBFC198FB0B982B6FFD406674113706FB4A03B425A3EB1",
+        "Category":  "Specification conflict",
+        "Reason":  "Mirroring must preserve volume sign under Core 1.3. A negative determinant alone is not a rejection condition.",
+        "Observed":  "Pass",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    },
+    {
+        "Suite":  6,
+        "Name":  "N_XXM_0420_01.3mf",
+        "SHA256":  "555490BBA9B6C9A2E6EFC59DCE68F734486E8D88FC4B8FBB93034AB03434A694",
+        "Category":  "Fixture defect",
+        "Reason":  "The archive does not contain the DOCTYPE described by this negative scenario. The intended DTD violation cannot be tested.",
+        "Observed":  "Pass",
+        "Reference":  "Official fixture archive and v2.4.1 scenario"
+    },
+    {
+        "Suite":  11,
+        "Name":  "N_DPX_3314_03.3mf",
+        "SHA256":  "517B83AA84B722DCD356851BF8117E6760BDFC69B89E31D9E7E4F1FDA0E2420C",
+        "Category":  "Specification conflict",
+        "Reason":  "Mirroring must preserve volume sign under Core 1.3. A negative determinant alone is not a rejection condition.",
+        "Observed":  "Pass",
+        "Reference":  "https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md"
+    }
+]

@@ -26,6 +26,7 @@ import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.w3c.dom.Document;
@@ -36,6 +37,8 @@ import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 
 public class FileStructureCheck {
+	private static final String VOLUMETRIC_NS = "http://schemas.3mf.io/3dmanufacturing/volumetric/2022/01";
+	private static final String IMPLICIT_NS = "http://schemas.3mf.io/3dmanufacturing/implicit/2023/12";
 	static Log logger = LogFactory.getLog(Class.class);
 	public String fCurrentFile = "";
 	public String fSchemaLoc = "";
@@ -46,6 +49,14 @@ public class FileStructureCheck {
 	public List<KeyInfo> keyinfo = null;
 	public int iErrMaxStr = 9;
 	public int iWrnMaxStr = 9;
+	public ValidationConsumer consumer = ValidationConsumer.PRINTER;
+	private final Set<String> referenceWhitespaceParts = new HashSet<String>();
+	private GeometryCheck geometry;
+	private ModelRules modelRules;
+	private Set<String> unsupportedAlternatives;
+	private final Set<String> reportedUnsupportedAlternatives = new HashSet<String>();
+	private boolean geometryLimitReported;
+	public boolean validationIncomplete;
 	public boolean bnonSecure = true;
 	private String sContent;
 	private NodeList nType_default;
@@ -127,19 +138,20 @@ public class FileStructureCheck {
 			"ER_033", "ER_034", "ER_035", "ER_036", "ER_050", "ER_057", "ER_061", "ER_063", "ER_064", "ER_065",
 			"ER_066", "ER_082", "ER_083", "ER_084", "ER_087", "ER_094", "ER_095", "ER_096", "ER_109", "ER_110",
 			"ER_111", "ER_080", "ER_086", "ER_089", "ER_090", "ER_091", "ER_092", "ER_093", "ER_098", "ER_112",
-			"ER_113", "ER_099", "ER_100", "ER_020", "ER_007", "ER_008", "ER_013", "ER_014", "ER_056", "ER_060",
+			"ER_113", "ER_099", "ER_100", "ER_020", "ER_007", "ER_008", "ER_013", "ER_056", "ER_060",
 			"ER_062", "ER_078", "ER_079", "ER_081", "ER_085", "ER_088", "ER_097", "ER_004", "ER_010", "ER_015",
 			"ER_016", "ER_017", "ER_018", "ER_019", "ER_021", "WR_022", "ER_023", "ER_024", "ER_025", "ER_026",
 			"ER_027", "ER_071", "ER_072", "ER_073", "ER_074", "ER_075", "ER_076", "ER_104", "ER_105", "ER_106",
 			"ER_077", "ER_052", "ER_053", "ER_041", "ER_042", "ER_039", "ER_040", "ER_070", "ER_108", "ER_133",
-			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "WR_005", "WR_006", "WR_008", "WR_007",
+			"ER_134", "ER_135", "ER_136", "ER_137", "ER_138", "ER_139", "ER_183", "ER_184", "ER_185", "ER_186", "ER_187", "ER_188", "ER_189", "ER_190", "ER_191", "ER_192", "ER_193", "ER_194", "ER_195", "ER_196", "ER_197", "ER_198", "ER_199", "ER_200", "ER_201", "ER_202", "ER_203", "ER_169", "ER_177", "ER_178", "ER_179", "ER_180", "ER_181", "WR_005", "WR_006", "WR_008", "WR_007",
 			"WR_009", "WR_010", "WR_011", "WR_002", "WR_003", "WR_004", "WR_012", "WR_013", "WR_001", "WR_014",
-			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "ER_176");
+			"WR_015", "WR_016", "WR_017", "WR_018", "WR_019", "WR_023", "WR_024", "WR_025", "WR_026", "WR_027", "WR_028", "WR_029", "WR_030", "WR_031", "WR_032", "ER_176");
 
 	public FileStructureCheck() {
 	}
 
 	public void checkFile() {
+		bdoProduction = false;
 		checkRel0();
 		iWrnMaxStr = iErrMaxStr;
 
@@ -220,23 +232,52 @@ public class FileStructureCheck {
 		String sRootModel = "";
 		ierCnt = 0;
 		iwrCnt = 0;
+		validationIncomplete = false;
+		geometryLimitReported = false;
+		geometry = new GeometryCheck(this::geometryIssue, consumer);
+		modelRules = new ModelRules((code, warning, message) -> {
+			if (warning) geometryIssue(code, true, message);
+			else structureIssue(code, "model semantics", message);
+		}, consumer);
+		referenceWhitespaceParts.clear();
+		inaccessibleParts.clear();
+		unsupportedAlternatives = null;
+		reportedUnsupportedAlternatives.clear();
+		aRelFiles.clear();
+		laRelNodes.clear();
+		relationshipRels.clear();
 		// 1) does the zip contain a [Content_Types].xml
 		try (ZipFile zfile = new ZipFile(fCurrentFile)) {
 			boolean bContent = false;
 			boolean bRels = false;
+			// Build a complete inventory independently of content skips and diagnostic limits.
+			entryNames.clear();
+			bentryNames.clear();
+			Enumeration<? extends ZipEntry> inventory = zfile.entries();
+			while (inventory.hasMoreElements()) {
+				String name = inventory.nextElement().getName();
+				String invalidName = PackageChecks.invalidName(name);
+				if (invalidName != null) structureIssue("ER_183", "part name", invalidName);
+				if (PackageChecks.unescapedUnicode(name)) structureWarning("WR_030", "part name",
+						"Unescaped Unicode in ZIP part name; percent-encoded UTF-8 is recommended for interoperability: " + name);
+				entryNames.add("/" + name);
+				bentryNames.add(name.endsWith(".rels") || name.endsWith("/"));
+			}
 			Enumeration<? extends ZipEntry> entries = zfile.entries();
 			while (entries.hasMoreElements()) {
 				System.gc();
 				ZipEntry entry = entries.nextElement();
+				String name = entry.getName();
 				if (entry.getSize() > 200000000) {
 					if (!StartUp.brunCli) {
 						JOptionPane.showMessageDialog(null,
 								"Part is too large for structural check: " + entry.getName(),
 								"Part too large for structural check.", JOptionPane.WARNING_MESSAGE);
 					}
-					fWarningReturn += "<br>WR_008: " + entry.getName() + " was skipped as too large.<br>";
+					validationIncomplete = true;
+					fWarningReturn += "<br>WR_008: Validation incomplete: " + StringEscapeUtils.escapeHtml4(entry.getName()) + " was skipped as too large for structural content checks (limit 200000000 bytes).<br>";
 					fxmlWarningReturn += "<Issue  issueID=\"WR_008\" severity=\"info\" class=\"structure\" type=\"memory limit\">";
-					fxmlWarningReturn += entry.getName() + " was skipped as too large.";
+					fxmlWarningReturn += StringEscapeUtils.escapeXml10("Validation incomplete: " + entry.getName() + " was skipped as too large for structural content checks (limit 200000000 bytes).");
 					fxmlWarningReturn += "</Issue>";
 					errChk("WR_008");
 					iwrCnt++;
@@ -247,13 +288,6 @@ public class FileStructureCheck {
 					continue;
 				}
 
-				String name = entry.getName();
-				entryNames.add("/" + name);
-				if (name.endsWith(".rels") || name.endsWith("/"))
-					bentryNames.add(true);
-				else
-					bentryNames.add(false);
-
 				{
 					// do the keystore check
 					InputStream zin = zfile.getInputStream(entry);
@@ -261,16 +295,21 @@ public class FileStructureCheck {
 						continue;// Directory
 					sContent = IOUtils.toString(zin, "UTF-8");
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-						DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactory = SafeXml.factory();
 						DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 						Document doc = dBuilder
 								.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
 						doc.getDocumentElement().normalize();
 						Element root = doc.getDocumentElement();
+						if (!checkReferenceWhitespace(doc, name)) {
+							zin.close();
+							return;
+						}
 						if (root != null) {
 							String rootname = root.getNodeName();
 							if (rootname.toLowerCase().equals("keystore")) {
 								if (!bKeystoreFound) {
+									structureIssue("ER_191", "keystore relationship", "Keystore " + name + " requires a keystore relationship in _rels/.rels.");
 									fWarningReturn += "<br>WR_019: A keystore file was located but a relationship was not defined in the _rels/.rels file. The file is being treated as not secure.<br>";
 									fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
 									fxmlWarningReturn += "A keystore file was located but a relationship was not defined in the _rels/.rels file. The file is being treated as not secure..";
@@ -299,9 +338,9 @@ public class FileStructureCheck {
 													+ " for element accessright in file: " + name
 													+ " Must have a coresponding consumer to index into.";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_029\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-											fxmlErrorReturn += "Invalid consumerindex: " + rid
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Invalid consumerindex: " + rid
 													+ " for element accessright in file: " + name
-													+ " Must have a coresponding consumer to index into.";
+													+ " Must have a coresponding consumer to index into.");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_029");
 											ierCnt++;
@@ -363,8 +402,8 @@ public class FileStructureCheck {
 													fWarningReturn += "<br>WR_019: CipherValue decryption failure in "
 															+ name + " for " + rid + ".<br>";
 													fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-													fxmlWarningReturn += "CipherValue decryption failure in " + name
-															+ " for " + rid + ".";
+													fxmlWarningReturn += StringEscapeUtils.escapeXml10("CipherValue decryption failure in " + name
+															+ " for " + rid + ".");
 													fxmlWarningReturn += "</Issue>";
 													errChk("WR_019");
 													iwrCnt++;
@@ -381,8 +420,8 @@ public class FileStructureCheck {
 												fWarningReturn += "<br>WR_019: CipherValue decryption failure in "
 														+ name + " for " + rid + ".<br>";
 												fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-												fxmlWarningReturn += "CipherValue decryption failure in " + name
-														+ " for " + rid + ".";
+												fxmlWarningReturn += StringEscapeUtils.escapeXml10("CipherValue decryption failure in " + name
+														+ " for " + rid + ".");
 												fxmlWarningReturn += "</Issue>";
 												errChk("WR_019");
 												iwrCnt++;
@@ -407,8 +446,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_112: Duplicate resourcedata path in keystore: " + lpath
 												+ " in file: " + name;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_004\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-										fxmlErrorReturn += "Duplicate resourcedata path in keystore: " + lpath
-												+ " in file: " + name;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate resourcedata path in keystore: " + lpath
+												+ " in file: " + name);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_112");
 										ierCnt++;
@@ -425,7 +464,7 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_028: " + lpath
 												+ " was not found for the keystore resourcedata.<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_028\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-										fxmlErrorReturn += lpath + " was not found for the keystore resourcedata.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10(lpath + " was not found for the keystore resourcedata.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_028");
 										ierCnt++;
@@ -442,8 +481,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_028: " + lpath
 													+ " was found for the keystore resourcedata but does not appear to be properly encrypted.<br>";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_028\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-											fxmlErrorReturn += lpath
-													+ " was found for the keystore resourcedata but does not appear to be properly encrypted.";
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10(lpath
+													+ " was found for the keystore resourcedata but does not appear to be properly encrypted.");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_028");
 											ierCnt++;
@@ -475,7 +514,7 @@ public class FileStructureCheck {
 					} else {
 						fErrorReturn += "<br>ER_003: " + name + " was found but did not start with <?xml.<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_003\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-						fxmlErrorReturn += name + " was found but did not start with <?xml.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10(name + " was found but did not start with <?xml.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_003");
 						ierCnt++;
@@ -489,7 +528,7 @@ public class FileStructureCheck {
 					// then the it must have validated (of course we setup an
 					// override for this)
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -508,8 +547,9 @@ public class FileStructureCheck {
 						String ltype = defN.getAttributes().getNamedItem("Type").getTextContent();
 						if (ltype.toLowerCase().contains("keystore"))
 							keystorecheck = ltarg;
-						String parent = name.substring(0, name.lastIndexOf("/_rels"));
-						if (!parent.substring(0, 1).equals("/"))
+						int relationshipFolder = name.lastIndexOf("/_rels");
+						String parent = relationshipFolder < 0 ? "/" : name.substring(0, relationshipFolder);
+						if (!parent.startsWith("/"))
 							parent = "/" + parent;
 						if (ltype.toLowerCase().contains("keystore"))
 							keystorecheck = name + "|" + ltarg;
@@ -524,7 +564,7 @@ public class FileStructureCheck {
 								&& !encryptedfilecheck.contentEquals(name + "|" + ltarg)) {
 							fErrorReturn += "<br>ER_112: Duplicate Relationship Target: " + ltarg + " in file: " + name;
 							fxmlErrorReturn += "<Issue  issueID=\"ER_004\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += "Duplicate Relationship Target: " + ltarg + " in file: " + name;
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate Relationship Target: " + ltarg + " in file: " + name);
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_112");
 							ierCnt++;
@@ -555,8 +595,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_112: Missing Relationship Target: Encryption specified, but a type was not defined for "
 									+ splitChk[1];
 							fxmlErrorReturn += "<Issue  issueID=\"ER_004\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += "Missing Relationship Target: Encryption specified, but a type was not defined for "
-									+ splitChk[1];
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Missing Relationship Target: Encryption specified, but a type was not defined for "
+									+ splitChk[1]);
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_112");
 							ierCnt++;
@@ -591,7 +631,7 @@ public class FileStructureCheck {
 								} catch (Throwable e) {
 									fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
 									fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-									fxmlWarningReturn += "decryption failure in " + floc + ".";
+									fxmlWarningReturn += StringEscapeUtils.escapeXml10("decryption failure in " + floc + ".");
 									fxmlWarningReturn += "</Issue>";
 									errChk("WR_019");
 									iwrCnt++;
@@ -608,7 +648,7 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_028: " + splitChk[1]
 									+ " was found but does not appear to be properly encrypted.<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_028\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-							fxmlErrorReturn += splitChk[1] + " was found but does not appear to be properly encrypted.";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10(splitChk[1] + " was found but does not appear to be properly encrypted.");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_028");
 							ierCnt++;
@@ -627,7 +667,7 @@ public class FileStructureCheck {
 						bdup = true;
 						fErrorReturn += "<br>ER_004: Duplicate Relationship id: " + stst + " in file: " + name;
 						fxmlErrorReturn += "<Issue  issueID=\"ER_004\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "Duplicate Relationship id: " + stst + " in file: " + name;
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate Relationship id: " + stst + " in file: " + name);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_004");
 					}
@@ -654,7 +694,7 @@ public class FileStructureCheck {
 					} else {
 						fErrorReturn += "<br>ER_005: [Content_Types].xml was found but did not start with <?xml.<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_005\" severity=\"critical\" class=\"structure\" type=\"file  error\">";
-						fxmlErrorReturn += "[Content_Types].xml was found but did not start with <?xml.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("[Content_Types].xml was found but did not start with <?xml.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_005");
 						ierCnt++;
@@ -666,7 +706,7 @@ public class FileStructureCheck {
 					// ran the validation earlier, so if it starts with <?xml,
 					// then the it must have validated
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -692,12 +732,12 @@ public class FileStructureCheck {
 								fWarningReturn += kn + "<br>";
 							}
 							fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-							fxmlWarningReturn += "The content type: "
+							fxmlWarningReturn += StringEscapeUtils.escapeXml10("The content type: "
 									+ defN.getAttributes().getNamedItem("ContentType").getTextContent()
-									+ "Does not appear to match the known types:";
+									+ "Does not appear to match the known types:");
 							String cm = "";
 							for (String kn : conTypes) {
-								fxmlWarningReturn += cm + kn;
+								fxmlWarningReturn += StringEscapeUtils.escapeXml10(cm + kn);
 								cm = ", ";
 							}
 							fxmlWarningReturn += "</Issue>";
@@ -722,8 +762,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_108: The ContentType extension " + ext
 											+ " has already been defined in [Content_Types].xml.<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_108\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-									fxmlErrorReturn += "The ContentType extension " + ext
-											+ " has already been defined in [Content_Types].xml.";
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("The ContentType extension " + ext
+											+ " has already been defined in [Content_Types].xml.");
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_108");
 									ierCnt++;
@@ -760,14 +800,18 @@ public class FileStructureCheck {
 							sOverRideType.add(stp);
 						}
 						String pn = defN.getAttributes().getNamedItem("PartName").getTextContent().trim();
+						if (pn.isEmpty()) {
+							structureIssue("ER_008", "content type error", "Override PartName must not be empty.");
+							continue;
+						}
 
 						// Checks if the PartName is a relative directory (starts with a slash)
 						if (pn.charAt(0) != '/') {
 							fErrorReturn += "<br>ER_132: The PartName in an Override in [Content_Types].xml is not a relative path.<br>Please add a"
 									+ " forward slash '/' to the front of the PartName " + pn;
 							fxmlErrorReturn += "<Issue  issueID=\"ER_132\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-							fxmlErrorReturn += "The PartName in an Override in [Content_Types].xml.<br> is not a relative path. Please add a"
-									+ " forward slash '/' to the front of the PartName";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("The PartName in an Override in [Content_Types].xml.<br> is not a relative path. Please add a"
+									+ " forward slash '/' to the front of the PartName");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_132");
 							ierCnt++;
@@ -782,8 +826,8 @@ public class FileStructureCheck {
 							fWarningReturn += "<br>WR_020: The file " + pn
 									+ " in [Content_Types].xml was not found in the .zip file";
 							fxmlWarningReturn += "<Issue  issueID=\"WR_020\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-							fxmlWarningReturn += "The file " + pn
-									+ "  in [Content_Types].xml was not found in the .zip file";
+							fxmlWarningReturn += StringEscapeUtils.escapeXml10("The file " + pn
+									+ "  in [Content_Types].xml was not found in the .zip file");
 							fxmlWarningReturn += "</Issue>";
 							errChk("WR_020");
 							iwrCnt++;
@@ -809,6 +853,21 @@ public class FileStructureCheck {
 								return;
 							}
 						} else {
+							// OPC permits only one Override for each part, regardless of content type.
+							if (sOverRide.contains(pn.toLowerCase())) {
+								fErrorReturn += "<br>ER_108: The Override PartName " + pn
+										+ " has already been defined in [Content_Types].xml.<br>";
+								fxmlErrorReturn += "<Issue  issueID=\"ER_108\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("The Override PartName " + pn
+										+ " has already been defined in [Content_Types].xml.");
+								fxmlErrorReturn += "</Issue>";
+								errChk("ER_108");
+								ierCnt++;
+								if (ierCnt > iErrMaxStr) {
+									fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+									return;
+								}
+							}
 							sOverRide.add(pn.toLowerCase());
 						}
 					}
@@ -824,7 +883,7 @@ public class FileStructureCheck {
 					} else {
 						fErrorReturn += "<br>ER_009: _rels/.rels was found but did not start with <?xml.<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_009\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-						fxmlErrorReturn += "_rels/.rels was found but did not start with <?xml.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("_rels/.rels was found but did not start with <?xml.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_009");
 						ierCnt++;
@@ -836,7 +895,7 @@ public class FileStructureCheck {
 					// ran the validation earlier, so if it starts with <?xml,
 					// then the it must have validated
 					// next step
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
 					Document doc = dBuilder
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
@@ -869,7 +928,7 @@ public class FileStructureCheck {
 								&& !encryptedfilecheck.contentEquals(ltarg)) {
 							fErrorReturn += "<br>ER_112: Duplicate Relationship Target: " + ltarg + " in file: " + name;
 							fxmlErrorReturn += "<Issue  issueID=\"ER_004\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += "Duplicate Relationship Target: " + ltarg + " in file: " + name;
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate Relationship Target: " + ltarg + " in file: " + name);
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_112");
 							ierCnt++;
@@ -893,7 +952,7 @@ public class FileStructureCheck {
 						bdup = true;
 						fErrorReturn += "<br>ER_010: Duplicate Relationship id: " + stst + " in file: " + name;
 						fxmlErrorReturn += "<Issue  issueID=\"ER_010\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "Duplicate Relationship id: " + stst + " in file: " + name;
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate Relationship id: " + stst + " in file: " + name);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_010");
 					}
@@ -918,7 +977,7 @@ public class FileStructureCheck {
 						continue;// Directory
 					sContent = IOUtils.toString(zin, "UTF-8");
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-						DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactory = SafeXml.factory();
 						dbFactory.setNamespaceAware(true);// needed to use
 															// getElementsByTagNameNS
 						DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -948,6 +1007,20 @@ public class FileStructureCheck {
 								bchkReqExtP = true;
 							}
 						}
+					}
+				}
+			}
+			// Content-type overrides may identify JPEG parts with another extension.
+			Enumeration<? extends ZipEntry> images = zfile.entries();
+			while (images.hasMoreElements()) {
+				ZipEntry imagePart = images.nextElement();
+				String imageName = imagePart.getName();
+				if (imagePart.isDirectory() || imagePart.getSize() > 200000000) continue;
+				if ("image/jpeg".equals(declaredContentType("/" + imageName))
+						|| imageName.toLowerCase(java.util.Locale.ROOT).matches(".*\\.jpe?g")) {
+					try (InputStream image = zfile.getInputStream(imagePart)) {
+						if (PackageChecks.cmykJpeg(image))
+							structureIssue("ER_187", "image color space", "CMYK/YCCK JPEG images are not permitted: " + imageName);
 					}
 				}
 			}
@@ -1006,8 +1079,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_012: keystore relationship specified, but a mustpreserve was not for the file: "
 								+ tst[1] + "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_012\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-						fxmlErrorReturn += "keystore relationship specified, but a mustpreserve was not for the file: "
-								+ tst[1];
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("keystore relationship specified, but a mustpreserve was not for the file: "
+								+ tst[1]);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_012");
 						ierCnt++;
@@ -1023,8 +1096,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_012: keystore relationship specified, but a ContentType for keystore was not found in the file: "
 								+ tst[1] + "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_012\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-						fxmlErrorReturn += "keystore relationship specified, but a ContentType for keystore was not found in the file: "
-								+ tst[1];
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("keystore relationship specified, but a ContentType for keystore was not found in the file: "
+								+ tst[1]);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_012");
 						ierCnt++;
@@ -1049,6 +1122,8 @@ public class FileStructureCheck {
 					continue;
 				if (name.contentEquals("[Content_Types].xml"))
 					continue;
+				if (name.endsWith(".rels") && !conTypes.get(3).equalsIgnoreCase(declaredContentType("/" + name)))
+					structureIssue("ER_198", "relationship content type", "Relationships part " + name + " must have content type " + conTypes.get(3) + ".");
 				bLocate = false;
 				if (nType_default != null) {
 					for (int ic = 0; ic < nType_default.getLength(); ic++) {
@@ -1070,18 +1145,17 @@ public class FileStructureCheck {
 				// System.out.println(overRideFileCheck(name));
 				if (!bLocate && overRideFileCheck("/" + name)) {
 					bLocate = true;
-					break;
 				}
 				if (!bLocate) {
-					fErrorReturn += "<br>ER_014: Could not find an extension for " + name
+					fWarningReturn += "<br>WR_024: Could not find an extension for " + name
 							+ " in [Content_Types].xml<br>";
-					fxmlErrorReturn += "<Issue  issueID=\"ER_014\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-					fxmlErrorReturn += "Could not find an extension for " + name + " in [Content_Types].xml";
-					fxmlErrorReturn += "</Issue>";
-					errChk("ER_014");
-					ierCnt++;
-					if (ierCnt > iErrMaxStr) {
-						fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+					fxmlWarningReturn += "<Issue  issueID=\"WR_024\" severity=\"info\" class=\"structure\" type=\"content type warning\">";
+					fxmlWarningReturn += StringEscapeUtils.escapeXml10("Could not find an extension for " + name + " in [Content_Types].xml");
+					fxmlWarningReturn += "</Issue>";
+					errChk("WR_024");
+					iwrCnt++;
+					if (iwrCnt > iWrnMaxStr) {
+						fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
 						return;
 					}
 				}
@@ -1096,7 +1170,7 @@ public class FileStructureCheck {
 				if (entryNames.indexOf(fFile) == -1) {
 					fErrorReturn += "<br>ER_015: Could not find file " + fFile + " as specified in _rels/.rels<br>";
 					fxmlErrorReturn += "<Issue  issueID=\"ER_015\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-					fxmlErrorReturn += "Could not find file " + fFile + " as specified in _rels/.rels";
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile + " as specified in _rels/.rels");
 					fxmlErrorReturn += "</Issue>";
 					errChk("ER_015");
 					ierCnt++;
@@ -1115,11 +1189,11 @@ public class FileStructureCheck {
 						fErrorReturn += kn + "<br>";
 					}
 					fxmlErrorReturn += "<Issue  issueID=\"ER_016\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-					fxmlErrorReturn += "Type " + fType + " in _rels/.rels is not one of the known types.<br>"
-							+ "<br>Does not appear to match the known types: ";
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Type " + fType + " in _rels/.rels is not one of the known types.<br>"
+							+ "<br>Does not appear to match the known types: ");
 					String cm = "";
 					for (String kn : relTypes) {
-						fxmlErrorReturn += cm + kn;
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10(cm + kn);
 						cm = ", ";
 					}
 					fxmlErrorReturn += "</Issue>";
@@ -1146,8 +1220,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_017: " + fFile
 									+ " in _rels/.rels does not appear to end with a known image extension.<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_017\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += fFile
-									+ " in _rels/.rels does not appear to end with a known image extension.";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile
+									+ " in _rels/.rels does not appear to end with a known image extension.");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_017");
 							ierCnt++;
@@ -1171,8 +1245,8 @@ public class FileStructureCheck {
 									+ " in _rels/.rels does not appear to end with extension " + extTypes.get(ix)
 									+ "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_018\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += fFile + " in _rels/.rels does not appear to end with extension "
-									+ extTypes.get(ix);
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " in _rels/.rels does not appear to end with extension "
+									+ extTypes.get(ix));
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_018");
 							ierCnt++;
@@ -1190,8 +1264,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_019: The target " + fFile + " with Id " + srel0
 								+ " in _rels/.rels does not appear to end with the expected extension as required.<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_019\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "The target " + fFile + " with Id " + srel0
-								+ " in _rels/.rels does not appear to end with the expected extension as required.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("The target " + fFile + " with Id " + srel0
+								+ " in _rels/.rels does not appear to end with the expected extension as required.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_019");
 						ierCnt++;
@@ -1204,10 +1278,12 @@ public class FileStructureCheck {
 
 				}
 			}
+			if (bLocate && !conTypes.get(0).equalsIgnoreCase(declaredContentType(sRootModel)))
+				structureIssue("ER_198", "start part", "StartPart must have the model content type: " + sRootModel + ".");
 			if (!bLocate) {
 				fErrorReturn += "<br>ER_020: Well known Id " + srel0 + " not found  in _rels/.rels as required.<br>";
 				fxmlErrorReturn += "<Issue  issueID=\"ER_020\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-				fxmlErrorReturn += "Well known Id " + srel0 + " not found  in _rels/.rels as required.";
+				fxmlErrorReturn += StringEscapeUtils.escapeXml10("Well known Id " + srel0 + " not found  in _rels/.rels as required.");
 				fxmlErrorReturn += "</Issue>";
 				errChk("ER_020");
 				ierCnt++;
@@ -1229,7 +1305,7 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_021: Could not find file " + fFile + " as specified in "
 								+ aRelFiles.get(idc) + "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_021\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "Could not find file " + fFile + " as specified in " + aRelFiles.get(idc);
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile + " as specified in " + aRelFiles.get(idc));
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_021");
 						ierCnt++;
@@ -1248,15 +1324,15 @@ public class FileStructureCheck {
 						for (String kn : relTypes) {
 							fWarningReturn += kn + "<br>";
 						}
-						fWarningReturn += "<Issue  issueID=\"WR_022\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-						fWarningReturn += "Type " + fType + " in " + aRelFiles.get(idc)
-								+ " is not one of the known types." + "Does not appear to match the known types:";
+						fxmlWarningReturn += "<Issue  issueID=\"WR_022\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
+						fxmlWarningReturn += StringEscapeUtils.escapeXml10("Type " + fType + " in " + aRelFiles.get(idc)
+								+ " is not one of the known types." + "Does not appear to match the known types:");
 						String cm = "";
 						for (String kn : relTypes) {
-							fWarningReturn += cm + kn;
+							fxmlWarningReturn += StringEscapeUtils.escapeXml10(cm + kn);
 							cm = ", ";
 						}
-						fWarningReturn += "</Issue>";
+						fxmlWarningReturn += "</Issue>";
 						errChk("WR_022");
 						iwrCnt++;
 						if (iwrCnt > iWrnMaxStr) {
@@ -1281,8 +1357,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_023" + fFile + " in " + aRelFiles.get(idc)
 										+ " does not appear to end with a known image extension.<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_023\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-								fxmlErrorReturn += fFile + " in " + aRelFiles.get(idc)
-										+ " does not appear to end with a known image extension.";
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " in " + aRelFiles.get(idc)
+										+ " does not appear to end with a known image extension.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_023");
 								ierCnt++;
@@ -1303,8 +1379,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_024" + fFile + " in " + aRelFiles.get(idc)
 										+ " does not appear to end with extension " + extTypes.get(ix) + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_024\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-								fxmlErrorReturn += fFile + " in " + aRelFiles.get(idc)
-										+ " does not appear to end with extension " + extTypes.get(ix);
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " in " + aRelFiles.get(idc)
+										+ " does not appear to end with extension " + extTypes.get(ix));
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_024");
 								ierCnt++;
@@ -1317,8 +1393,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_025" + fFile + " in " + aRelFiles.get(idc)
 										+ " with core-properties must appear in the  .rels file.<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_025\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-								fxmlErrorReturn += fFile + " in " + aRelFiles.get(idc)
-										+ " with core-properties must appear in the  .rels file.";
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " in " + aRelFiles.get(idc)
+										+ " with core-properties must appear in the  .rels file.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_025");
 								ierCnt++;
@@ -1341,7 +1417,7 @@ public class FileStructureCheck {
 					fErrorReturn += "<br>ER_026: Could not find _rels/ in " + sRel
 							+ " as specified for .rels files.<br>";
 					fxmlErrorReturn += "<Issue  issueID=\"ER_026\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-					fxmlErrorReturn += "Could not find _rels/ in " + sRel + " as specified for .rels files";
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find _rels/ in " + sRel + " as specified for .rels files");
 					fxmlErrorReturn += "</Issue>";
 					errChk("ER_026");
 					return;
@@ -1352,8 +1428,8 @@ public class FileStructureCheck {
 					fErrorReturn += "<br>ER_027: Could not find file " + tfind
 							+ " as expected from the .rels relationship to " + sRel + "<br>";
 					fxmlErrorReturn += "<Issue  issueID=\"ER_027\" severity=\"moderate\" class=\"structure\" type=\"invalid relationship\">";
-					fxmlErrorReturn += "Could not find file " + tfind + " as expected from the .rels relationship to "
-							+ sRel;
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + tfind + " as expected from the .rels relationship to "
+							+ sRel);
 					fxmlErrorReturn += "</Issue>";
 					errChk("ER_027");
 					ierCnt++;
@@ -1404,11 +1480,12 @@ public class FileStructureCheck {
 							}
 						}
 						if (!bfnde) {
+							structureIssue("ER_198", "encrypted relationship", "Encrypted model " + ename + " requires an encryptedfile relationship.");
 							fWarningReturn += "<br>WR_019: The file " + ename
 									+ " is encrypted but an encryptedfile relationship was not specified.<br>";
 							fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-							fxmlWarningReturn += "The file " + ename
-									+ " is encrypted but an encryptedfile relationship was not specified.<br>";
+							fxmlWarningReturn += StringEscapeUtils.escapeXml10("The file " + ename
+									+ " is encrypted but an encryptedfile relationship was not specified.<br>");
 							fxmlWarningReturn += "</Issue>";
 							errChk("WR_019");
 							iwrCnt++;
@@ -1419,50 +1496,15 @@ public class FileStructureCheck {
 							}
 						}
 
-						sContent = "";
-						// see if we can decrypt
-						String floc = ename;
-						// See if we have this in keyinfo
-						KeyInfo keyitem = CheckKeyInfo(floc);
-						if (keyitem != null) {
-							DeCryptModel dcry = new DeCryptModel();
-							dcry.sAAD = keyitem.getAAD();
-							dcry.bSha256 = keyitem.getSha256();
-							dcry.bNoComp = keyitem.getNoComp();
-							dcry.FileLoc = "ztmp" + keyitem.getFile();
-							dcry.sCT = keyitem.getCT();
-							dcry.sIV = keyitem.getIV();
-							dcry.sTAG = keyitem.getTAG();
-							try {
-								String dtext = dcry.DoDecrypt();
-								if (!dtext.toLowerCase().startsWith(("<?xml"))) {
-									zin.close();
-									continue;
-								} else {
-									sContent = dtext;
-								}
-							} catch (Exception e) {
-								fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
-								fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-								fxmlWarningReturn += "decryption failure in " + floc + ".";
-								fxmlWarningReturn += "</Issue>";
-								errChk("WR_019");
-								iwrCnt++;
-								if (iwrCnt > iWrnMaxStr) {
-									fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
-									zin.close();
-									return;
-								}
-								continue;
-							}
-						}
+						sContent = decryptReference(sContent, ename);
+						if (sContent == null) { zin.close(); continue; }
 					}
 					if (sContent.trim().toLowerCase().startsWith("<?xml")) {
 						bContent = true;
 					} else {
 						fErrorReturn += "<br>ER_028: " + ename + " was found but did not start with <?xml.<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_028\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-						fxmlErrorReturn += ename + " was found but did not start with <?xml.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10(ename + " was found but did not start with <?xml.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_028");
 						ierCnt++;
@@ -1476,7 +1518,7 @@ public class FileStructureCheck {
 					zin.close();
 					if (ename.contentEquals(sRootModel))
 						bCheckPath = true;
-					DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+					DocumentBuilderFactory dbFactory = SafeXml.factory();
 					dbFactory.setNamespaceAware(true);// needed to use
 														// getElementsByTagNameNS
 					DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -1484,6 +1526,17 @@ public class FileStructureCheck {
 							.parse(new InputSource(new ByteArrayInputStream(sContent.getBytes("utf-8"))));
 					doc.getDocumentElement().normalize();
 
+					// Also inspect decrypted model parts, which were opaque in the ZIP pass.
+					if (!checkReferenceWhitespace(doc, ename.substring(1)))
+						return;
+
+					if (ModelSchema.unsupportedRequired(doc) != null && skipUnsupportedAlternative(zfile, ename)) {
+						int position = entryNames.indexOf(ename);
+						if (position >= 0) bentryNames.set(position, true);
+						continue;
+					}
+					checkModelRules(doc, ename);
+					modelRules.addModel(doc, ename);
 					// gets a list of the uuids and stackids, expanded to
 					// include basematerials if present
 					stackId.clear();
@@ -1503,6 +1556,7 @@ public class FileStructureCheck {
 					idUsed.clear();
 
 					fillUuid(doc, ename);
+					geometry.addModel(doc, ename, zfile, this::declaredContentType);
 
 					// if they are empty, they will kick out with no duplicates
 					// check for duplicate basematerials ids.
@@ -1511,8 +1565,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_029: Duplicate basematerials id: " + smid + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_029\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate basematerials id: " + smid + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate basematerials id: " + smid + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_029");
 						ierCnt++;
@@ -1527,8 +1581,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_030: Duplicate colorgroup id: " + smid + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_030\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate colorgroup id: " + smid + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate colorgroup id: " + smid + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_030");
 						ierCnt++;
@@ -1544,8 +1598,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_031: Duplicate texture2d id: " + smid + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_031\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate texture2d id: " + smid + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate texture2d id: " + smid + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_031");
 						ierCnt++;
@@ -1561,8 +1615,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_032: Duplicate texture2dgroup id: " + smid + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_032\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate texture2dgroup id: " + smid + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate texture2dgroup id: " + smid + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_032");
 						ierCnt++;
@@ -1578,8 +1632,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_033: Duplicate compositematerials id: " + smid + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_033\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate compositematerials id: " + smid + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate compositematerials id: " + smid + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_033");
 						ierCnt++;
@@ -1595,8 +1649,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_034: Duplicate multiproperties id: " + smid + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_034\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate multiproperties id: " + smid + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate multiproperties id: " + smid + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_034");
 						ierCnt++;
@@ -1620,9 +1674,9 @@ public class FileStructureCheck {
 										+ stackFileId.get(ic)
 										+ " Must be unique across the resources in the model part.";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_035\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-								fxmlErrorReturn += "Duplicate slicestack id: " + oUid + " in file: "
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate slicestack id: " + oUid + " in file: "
 										+ stackFileId.get(ic)
-										+ " Must be unique across the resources in the model part.";
+										+ " Must be unique across the resources in the model part.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_035");
 							}
@@ -1680,8 +1734,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_036: Duplicate id: " + s + " in " + sfnd + ". Located in file: " + ename
 								+ ". Id must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_036\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate id: " + s + " in " + sfnd + ". Located in file: " + ename
-								+ ". Id must be unique across the resources in the model part";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate id: " + s + " in " + sfnd + ". Located in file: " + ename
+								+ ". Id must be unique across the resources in the model part");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_036");
 						ierCnt++;
@@ -1691,7 +1745,7 @@ public class FileStructureCheck {
 						}
 					}
 					if (ename.contentEquals(sRootModel)) {
-						bdoProduction = false;
+						bdoProduction = ModelSchema.usesProduction(doc);
 						Set<String> prefs = findPrefix(doc);
 						NodeList n1 = doc.getElementsByTagName("model");
 						Node n2 = n1.item(0);
@@ -1703,8 +1757,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_052: Could not find file " + thumbPath
 										+ " as specified in the thumbnail attribute path in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_052\" severity=\"low\" class=\"structure\" type=\"file error\">";
-								fxmlErrorReturn += "Could not find file " + thumbPath
-										+ " as specified in the thumbnail attribute path in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + thumbPath
+										+ " as specified in the thumbnail attribute path in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_052");
 								ierCnt++;
@@ -1720,12 +1774,6 @@ public class FileStructureCheck {
 							for (int mm = 0; mm < mprs.length; mm++) {
 								requiredExtensions.add(mprs[mm]);
 							}
-							for (String p : prefs) {
-								for (int j = 0; j < mprs.length; j++) {
-									if (p.contentEquals(mprs[j]))
-										bdoProduction = true;
-								}
-							}
 						}
 
 						if (n2.getAttributes().getNamedItem("recommendedextensions") != null) {
@@ -1740,8 +1788,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_129: extension " + current
 												+ " found in both required and recommended extension list";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_129\" severity=\"low\" class=\"structure\" type=\"file error\">";
-										fxmlErrorReturn += "extension " + current
-												+ " found in both required and recommended extension list";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("extension " + current
+												+ " found in both required and recommended extension list");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_129");
 										ierCnt++;
@@ -1760,7 +1808,7 @@ public class FileStructureCheck {
 								fWarningReturn += "<br>WR_012: requiredextensions attribute not found in " + ename
 										+ ".<br>";
 								fxmlWarningReturn += "<Issue  issueID=\"WR_012\" severity=\"info\" class=\"structure\" type=\"Required Extensions\">";
-								fxmlWarningReturn += "requiredextensions attribute not found in " + ename + ".";
+								fxmlWarningReturn += StringEscapeUtils.escapeXml10("requiredextensions attribute not found in " + ename + ".");
 								fxmlWarningReturn += "</Issue>";
 								errChk("WR_012");
 								iwrCnt++;
@@ -1786,8 +1834,8 @@ public class FileStructureCheck {
 											fWarningReturn += "<br>WR_013: Could not find prefix " + p
 													+ " in model attribute requiredextensions in " + ename + "<br>";
 											fxmlWarningReturn += "<Issue  issueID=\"WR_013\" severity=\"info\" class=\"structure\" type=\"Required Extensions\">";
-											fxmlWarningReturn += "Could not find prefix " + p
-													+ " in model attribute requiredextensions in " + ename;
+											fxmlWarningReturn += StringEscapeUtils.escapeXml10("Could not find prefix " + p
+													+ " in model attribute requiredextensions in " + ename);
 											fxmlWarningReturn += "</Issue>";
 											errChk("WR_013");
 											iwrCnt++;
@@ -1816,7 +1864,7 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_039: UUID attribute for build not found in " + ename
 											+ ".<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_039\" severity=\"low\" class=\"structure\" type=\"UUID Error\">";
-									fxmlErrorReturn += "UUID attribute for build not found in " + ename + ".";
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("UUID attribute for build not found in " + ename + ".");
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_039");
 									ierCnt++;
@@ -1835,7 +1883,7 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_040: UUID attribute for build found empty in " + ename
 												+ ".<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_040\" severity=\"low\" class=\"structure\" type=\"UUID Error\">";
-										fxmlErrorReturn += "UUID attribute for build found empty in " + ename + ".";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("UUID attribute for build found empty in " + ename + ".");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_040");
 										ierCnt++;
@@ -1888,8 +1936,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_041: Thumbnail reference in model part should have corresponding .rels file, none found for file: "
 												+ ename + ".";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_041\" severity=\"low\" class=\"structure\" type=\"invalid relationship\">";
-										fxmlErrorReturn += "Thumbnail reference in model part should have corresponding .rels file, none found for file: "
-												+ ename + ".";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Thumbnail reference in model part should have corresponding .rels file, none found for file: "
+												+ ename + ".");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_041");
 										ierCnt++;
@@ -1917,8 +1965,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_042: Thumbnail reference in model part should have corresponding Target in .rels file, none found for file: "
 													+ frels + ".";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_042\" severity=\"low\" class=\"structure\" type=\"invalid relationship\">";
-											fxmlErrorReturn += "Thumbnail reference in model part should have corresponding Target in .rels file, none found for file: "
-													+ frels + ".";
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Thumbnail reference in model part should have corresponding Target in .rels file, none found for file: "
+													+ frels + ".");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_042");
 											ierCnt++;
@@ -1943,8 +1991,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_043: Path " + nStat + " found in " + ename
 												+ " which is not the root model.<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_043\" severity=\"high\" class=\"structure\" type=\"path error\">";
-										fxmlErrorReturn += "Path " + nStat + " found in " + ename
-												+ " which is not the root model.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Path " + nStat + " found in " + ename
+												+ " which is not the root model.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_043");
 										ierCnt++;
@@ -1965,8 +2013,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_044: Path " + nStat + " found in " + ename
 												+ " which is not the root model.<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_044\" severity=\"high\" class=\"structure\" type=\"path error\">";
-										fxmlErrorReturn += "Path " + nStat + " found in " + ename
-												+ " which is not the root model.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Path " + nStat + " found in " + ename
+												+ " which is not the root model.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_044");
 										ierCnt++;
@@ -1987,8 +2035,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_045: Path " + nStat + " found in " + ename
 												+ " which is not the root model.<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_045\" severity=\"high\" class=\"structure\" type=\"path error\">";
-										fxmlErrorReturn += "Path " + nStat + " found in " + ename
-												+ " which is not the root model.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Path " + nStat + " found in " + ename
+												+ " which is not the root model.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_045");
 										ierCnt++;
@@ -2013,7 +2061,7 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_046: Could not find file " + fFile + " as specified in " + ename
 									+ "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_046\" severity=\"high\" class=\"structure\" type=\"file error\">";
-							fxmlErrorReturn += "Could not find file " + fFile + " as specified in " + ename;
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile + " as specified in " + ename);
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_046");
 							ierCnt++;
@@ -2026,8 +2074,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_047: The slicepath " + fFile + " as specified in " + ename
 									+ " is referencing itself.<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_047\" severity=\"high\" class=\"structure\" type=\"path error\">";
-							fxmlErrorReturn += "The slicepath " + fFile + " as specified in " + ename
-									+ " is referencing itself.";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("The slicepath " + fFile + " as specified in " + ename
+									+ " is referencing itself.");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_047");
 							ierCnt++;
@@ -2070,7 +2118,7 @@ public class FileStructureCheck {
 
 										fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
 										fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-										fxmlWarningReturn += "decryption failure in " + floc + ".";
+										fxmlWarningReturn += StringEscapeUtils.escapeXml10("decryption failure in " + floc + ".");
 										fxmlWarningReturn += "</Issue>";
 										errChk("WR_019");
 										iwrCnt++;
@@ -2087,7 +2135,7 @@ public class FileStructureCheck {
 							if (!sContent.trim().toLowerCase().startsWith("<?xml")) {
 								fErrorReturn += "<br>ER_048: " + fFile + " was found but did not start with <?xml.<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_048\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-								fxmlErrorReturn += fFile + " was found but did not start with <?xml.";
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " was found but did not start with <?xml.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_048");
 								ierCnt++;
@@ -2100,7 +2148,7 @@ public class FileStructureCheck {
 						} else {
 							fErrorReturn += "<br>ER_049: " + fFile + " was not found in " + fCurrentFile + "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_049\" severity=\"high\" class=\"structure\" type=\"file error\">";
-							fxmlErrorReturn += fFile + " was not found in " + fCurrentFile;
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " was not found in " + fCurrentFile);
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_049");
 							ierCnt++;
@@ -2112,7 +2160,7 @@ public class FileStructureCheck {
 						}
 						ssIdListRef.add(fFile + "|" + slcId);
 						b2dSlices = true;
-						DocumentBuilderFactory dbFactoryx = DocumentBuilderFactory.newInstance();
+						DocumentBuilderFactory dbFactoryx = SafeXml.factory();
 						dbFactoryx.setNamespaceAware(true);// needed to use
 															// getElementsByTagNameNS
 						DocumentBuilder dBuilderx = dbFactoryx.newDocumentBuilder();
@@ -2131,8 +2179,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_050: The slicestack id \"" + slcId + "\" was not found in " + fFile
 									+ " as referenced in " + ename + ".<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_050\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-							fxmlErrorReturn += "The slicestack id \"" + slcId + "\" was not found in " + fFile
-									+ " as referenced in " + ename + ".";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("The slicestack id \"" + slcId + "\" was not found in " + fFile
+									+ " as referenced in " + ename + ".");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_050");
 							ierCnt++;
@@ -2158,8 +2206,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_051: Could not find file " + nStat
 													+ " as specified in the path in " + sRootModel + "<br>";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_051\" severity=\"high\" class=\"structure\" type=\"file error\">";
-											fxmlErrorReturn += "Could not find file " + nStat
-													+ " as specified in the path in " + sRootModel;
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + nStat
+													+ " as specified in the path in " + sRootModel);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_051");
 											ierCnt++;
@@ -2175,9 +2223,9 @@ public class FileStructureCheck {
 													+ " not found in associated rels file as specified in the path in "
 													+ sRootModel + "<br>";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_113\" severity=\"high\" class=\"structure\" type=\"path error\">";
-											fxmlErrorReturn += "Root model reference for " + nStat
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Root model reference for " + nStat
 													+ " not found in associated rels file as specified in the path in "
-													+ sRootModel;
+													+ sRootModel);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_113");
 											ierCnt++;
@@ -2223,8 +2271,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_052: Could not find file " + fFile
 											+ " as specified in the thumbnail attribute path in " + ename + "<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_052\" severity=\"low\" class=\"structure\" type=\"file error\">";
-									fxmlErrorReturn += "Could not find file " + fFile
-											+ " as specified in the thumbnail attribute path in " + ename;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile
+											+ " as specified in the thumbnail attribute path in " + ename);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_052");
 									ierCnt++;
@@ -2246,8 +2294,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_109: Pid may not be specified in objects that contain components. Found pid="
 												+ pidl + " in object with id=" + bid + "" + ename + "<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_109\" severity=\"high\" class=\"structure\" type=\"ID Error\">";
-										fxmlErrorReturn += "Pid may not be specified in objects that contain components. Found pid="
-												+ pidl + " in object with id=" + bid + "" + ename;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Pid may not be specified in objects that contain components. Found pid="
+												+ pidl + " in object with id=" + bid + "" + ename);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_109");
 										ierCnt++;
@@ -2269,8 +2317,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_110: Pindex may not be specified in objects that contain components. Found pindex="
 												+ pidl + " in object with id=" + bid + "" + ename + "<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_110\" severity=\"high\" class=\"structure\" type=\"ID Error\">";
-										fxmlErrorReturn += "Pindex may not be specified in objects that contain components. Found pindex="
-												+ pidl + " in object with id=" + bid + "" + ename;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Pindex may not be specified in objects that contain components. Found pindex="
+												+ pidl + " in object with id=" + bid + "" + ename);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_110");
 										ierCnt++;
@@ -2290,8 +2338,7 @@ public class FileStructureCheck {
 						Node defN = nl.item(ic);
 						String fFile = "";
 
-						// If this has a transform, validate that m02, m12, m20,
-						// and m21 are 0 and m22 is 1
+						// Collect planar-transform violations for the slice-only check below.
 						if (defN.getAttributes().getNamedItem("transform") != null) {
 							String stran = defN.getAttributes().getNamedItem("transform").getTextContent().trim()
 									.replaceAll(" +", " ");
@@ -2303,60 +2350,30 @@ public class FileStructureCheck {
 									transformErrorLoc
 											.add("ER_071: Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_071\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_071");
 								}
 								if (Float.parseFloat(tstNum[5]) != 0.f) {
 									transformErrorLoc
 											.add("ER_072: Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_072\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_072");
 								}
 								if (Float.parseFloat(tstNum[6]) != 0.f) {
 									transformErrorLoc
 											.add("ER_073: Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_073\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_073");
 								}
 								if (Float.parseFloat(tstNum[7]) != 0.f) {
 									transformErrorLoc
 											.add("ER_074: Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_074\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_074");
 								}
 								if (Float.parseFloat(tstNum[8]) != 1.f) {
 									transformErrorLoc
 											.add("ER_075: Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_075\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_075");
 								}
 							} catch (Exception et1) {
 								transformErrorLoc.add("ER_076: Could not parse number contained in " + stran
 										+ " transform in " + ename);
-								fxmlErrorReturn += "<Issue  issueID=\"ER_076\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-								fxmlErrorReturn += "Could not parse number contained in " + stran + " transform in "
-										+ ename;
-								fxmlErrorReturn += "</Issue>";
-								errChk("ER_076");
 							}
 
 						}
@@ -2372,8 +2389,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_053: Could not find file " + fFile
 										+ " as specified in the thumbnail attribute path in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_053\" severity=\"low\" class=\"structure\" type=\"file error\">";
-								fxmlErrorReturn += "Could not find file " + fFile
-										+ " as specified in the thumbnail attribute path in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile
+										+ " as specified in the thumbnail attribute path in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_053");
 								ierCnt++;
@@ -2388,8 +2405,8 @@ public class FileStructureCheck {
 										+ " not found in associated rels file as specified in the path in " + ename
 										+ "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_113\" severity=\"high\" class=\"structure\" type=\"path error\">";
-								fxmlErrorReturn += "Thumbnail Reference for " + fFile
-										+ " not found in associated rels file as specified in the path in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Thumbnail Reference for " + fFile
+										+ " not found in associated rels file as specified in the path in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_113");
 								ierCnt++;
@@ -2412,8 +2429,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_054: Could not find file " + fFile
 										+ " as specified in the item attribute path in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_054\" severity=\"high\" class=\"structure\" type=\"file error\">";
-								fxmlErrorReturn += "Could not find file " + fFile
-										+ " as specified in the item attribute path in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile
+										+ " as specified in the item attribute path in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_054");
 								ierCnt++;
@@ -2428,8 +2445,8 @@ public class FileStructureCheck {
 											+ " not found in associated rels file as specified in the path in " + ename
 											+ "<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_113\" severity=\"high\" class=\"structure\" type=\"path error\">";
-									fxmlErrorReturn += "PNS File Reference Check for " + fFile
-											+ " not found in associated rels file as specified in the path in " + ename;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("PNS File Reference Check for " + fFile
+											+ " not found in associated rels file as specified in the path in " + ename);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_113");
 									ierCnt++;
@@ -2452,51 +2469,13 @@ public class FileStructureCheck {
 								if (bchk && zfile.getEntry(fFile.substring(1)).getSize() < 200000000) {
 									InputStream ziny = zfile.getInputStream(zfile.getEntry(fFile.substring(1)));
 									sContent = IOUtils.toString(ziny, "UTF-8");
-									if (sContent.startsWith("%3McF")) {
-										sContent = "";
-										// see if we can decrypt
-										String floc = fFile;
-										// See if we have this in keyinfo
-										KeyInfo keyitem = CheckKeyInfo(floc);
-										if (keyitem != null) {
-											DeCryptModel dcry = new DeCryptModel();
-											dcry.sAAD = keyitem.getAAD();
-											dcry.bSha256 = keyitem.getSha256();
-											dcry.bNoComp = keyitem.getNoComp();
-											dcry.FileLoc = "ztmp" + keyitem.getFile();
-											dcry.sCT = keyitem.getCT();
-											dcry.sIV = keyitem.getIV();
-											dcry.sTAG = keyitem.getTAG();
-											try {
-												String dtext = dcry.DoDecrypt();
-												if (!dtext.toLowerCase().startsWith(("<?xml"))) {
-
-												} else {
-													sContent = dtext;
-												}
-											} catch (Exception e) {
-
-												fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
-												fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-												fxmlWarningReturn += "decryption failure in " + floc + ".";
-												fxmlWarningReturn += "</Issue>";
-												errChk("WR_019");
-												iwrCnt++;
-												if (iwrCnt > iWrnMaxStr) {
-													fWarningReturn += "<br>More than " + iWrnMaxStr
-															+ " warnings found, stopping..<br>";
-													ziny.close();
-													return;
-												}
-											}
-										}
-
-									}
+									sContent = decryptReference(sContent, fFile);
+									if (sContent == null) { ziny.close(); continue; }
 									if (!sContent.trim().toLowerCase().startsWith("<?xml")) {
 										fErrorReturn += "<br>ER_055: " + fFile
 												+ " was found but did not start with <?xml.<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_055\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-										fxmlErrorReturn += fFile + " was found but did not start with <?xml.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " was found but did not start with <?xml.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_055");
 										ierCnt++;
@@ -2511,7 +2490,7 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_056: " + fFile
 												+ " was found but does not have a model extension.";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_056\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-										fxmlErrorReturn += fFile + " was found but does not have a model extension.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " was found but does not have a model extension.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_056");
 										ierCnt++;
@@ -2537,8 +2516,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_057: Did not find an object id for item with objectid="
 												+ objectid + " in " + ename + "<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_057\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-										fxmlErrorReturn += "Did not find an object id for item with objectid="
-												+ objectid + " in " + ename;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for item with objectid="
+												+ objectid + " in " + ename);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_057");
 										ierCnt++;
@@ -2564,8 +2543,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_057: Did not find an object id for item with objectid="
 										+ objectid + " in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_057\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-								fxmlErrorReturn += "Did not find an object id for item with objectid=" + objectid
-										+ " in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for item with objectid=" + objectid
+										+ " in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_057");
 								ierCnt++;
@@ -2582,8 +2561,7 @@ public class FileStructureCheck {
 					for (int ic = 0; ic < nl.getLength(); ic++) {
 						Node defN = nl.item(ic);
 
-						// If this has a transform, validate that m02, m12, m20,
-						// and m21 are 0 and m22 is 1
+						// Collect planar-transform violations for the slice-only check below.
 						if (defN.getAttributes().getNamedItem("transform") != null) {
 							String stran = defN.getAttributes().getNamedItem("transform").getTextContent().trim()
 									.replaceAll(" +", " ");
@@ -2595,60 +2573,30 @@ public class FileStructureCheck {
 									transformErrorLoc
 											.add("ER_071: Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_071\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[2] + " for m02 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_071");
 								}
 								if (Float.parseFloat(tstNum[5]) != 0.f) {
 									transformErrorLoc
 											.add("ER_072: Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_072\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[5] + " for m12 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_072");
 								}
 								if (Float.parseFloat(tstNum[6]) != 0.f) {
 									transformErrorLoc
 											.add("ER_073: Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_073\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[6] + " for m20 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_073");
 								}
 								if (Float.parseFloat(tstNum[7]) != 0.f) {
 									transformErrorLoc
 											.add("ER_074: Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_074\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[7] + " for m21 found (should be 0.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_074");
 								}
 								if (Float.parseFloat(tstNum[8]) != 1.f) {
 									transformErrorLoc
 											.add("ER_075: Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
 													+ stran + " for transform in " + ename);
-									fxmlErrorReturn += "<Issue  issueID=\"ER_075\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-									fxmlErrorReturn += "Invalid " + tstNum[8] + " for m22 found (should be 1.0) in "
-											+ stran + " for transform in " + ename;
-									fxmlErrorReturn += "</Issue>";
-									errChk("ER_075");
 								}
 							} catch (Exception et1) {
 								transformErrorLoc.add("ER_076: Could not parse number contained in " + stran
 										+ " transform in " + ename);
-								fxmlErrorReturn += "<Issue  issueID=\"ER_076\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">";
-								fxmlErrorReturn += "Could not parse number contained in " + stran + " transform in "
-										+ ename;
-								fxmlErrorReturn += "</Issue>";
-								errChk("ER_076");
 							}
 
 						}
@@ -2666,8 +2614,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_058: Could not find file " + fFile
 										+ " as specified in the component attribute path in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_058\" severity=\"high\" class=\"structure\" type=\"path error\">";
-								fxmlErrorReturn += "Could not find file " + fFile
-										+ " as specified in the component attribute path in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + fFile
+										+ " as specified in the component attribute path in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_058");
 								ierCnt++;
@@ -2682,8 +2630,8 @@ public class FileStructureCheck {
 											+ " not found in associated rels file as specified in the path in " + ename
 											+ "<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_113\" severity=\"high\" class=\"structure\" type=\"path error\">";
-									fxmlErrorReturn += "Component Reference for " + fFile
-											+ " not found in associated rels file as specified in the path in " + ename;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Component Reference for " + fFile
+											+ " not found in associated rels file as specified in the path in " + ename);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_113");
 									ierCnt++;
@@ -2705,51 +2653,13 @@ public class FileStructureCheck {
 								if (bchk && zfile.getEntry(fFile.substring(1)).getSize() < 200000000) {
 									InputStream ziny = zfile.getInputStream(zfile.getEntry(fFile.substring(1)));
 									sContent = IOUtils.toString(ziny, "UTF-8");
-									if (sContent.startsWith("%3McF")) {
-										sContent = "";
-										// see if we can decrypt
-										String floc = fFile;
-										// See if we have this in keyinfo
-										KeyInfo keyitem = CheckKeyInfo(floc);
-										if (keyitem != null) {
-											DeCryptModel dcry = new DeCryptModel();
-											dcry.sAAD = keyitem.getAAD();
-											dcry.bSha256 = keyitem.getSha256();
-											dcry.bNoComp = keyitem.getNoComp();
-											dcry.FileLoc = "ztmp" + keyitem.getFile();
-											dcry.sCT = keyitem.getCT();
-											dcry.sIV = keyitem.getIV();
-											dcry.sTAG = keyitem.getTAG();
-											try {
-												String dtext = dcry.DoDecrypt();
-												if (!dtext.toLowerCase().startsWith(("<?xml"))) {
-
-												} else {
-													sContent = dtext;
-												}
-											} catch (Exception e) {
-
-												fWarningReturn += "<br>WR_019: decryption failure in " + floc + ".<br>";
-												fxmlWarningReturn += "<Issue  issueID=\"WR_019\" severity=\"info\" class=\"structure\" type=\"content type error\">";
-												fxmlWarningReturn += "decryption failure in " + floc + ".";
-												fxmlWarningReturn += "</Issue>";
-												errChk("WR_019");
-												iwrCnt++;
-												if (iwrCnt > iWrnMaxStr) {
-													fWarningReturn += "<br>More than " + iWrnMaxStr
-															+ " warnings found, stopping..<br>";
-													ziny.close();
-													return;
-												}
-											}
-										}
-
-									}
+									sContent = decryptReference(sContent, fFile);
+									if (sContent == null) { ziny.close(); continue; }
 									if (!sContent.trim().toLowerCase().startsWith("<?xml")) {
 										fErrorReturn += "<br>ER_059: " + fFile
 												+ " was found but did not start with <?xml.<br>";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_059\" severity=\"critical\" class=\"structure\" type=\"file error\">";
-										fxmlErrorReturn += fFile + " was found but did not start with <?xml.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " was found but did not start with <?xml.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_059");
 										ierCnt++;
@@ -2764,7 +2674,7 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_060: " + fFile
 												+ " was found but does not have a model extension.";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_060\" severity=\"moderate\" class=\"structure\" type=\"content type error\">";
-										fxmlErrorReturn += fFile + " was found but does not have a model extension.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10(fFile + " was found but does not have a model extension.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_060");
 										ierCnt++;
@@ -2791,8 +2701,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_061: Did not find an object id for component with objectid="
 													+ objectid + " in " + ename + "<br>";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_061\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-											fxmlErrorReturn += "Did not find an object id for component with objectid="
-													+ objectid + " in " + ename;
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for component with objectid="
+													+ objectid + " in " + ename);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_061");
 											ierCnt++;
@@ -2835,8 +2745,8 @@ public class FileStructureCheck {
 															+ " in " + ename
 															+ " appears to precede the defining object.<br>";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_062\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-													fxmlErrorReturn += "Component with objectid=" + objectid + " in "
-															+ ename + " appears to precede the defining object.";
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Component with objectid=" + objectid + " in "
+															+ ename + " appears to precede the defining object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_062");
 													ierCnt++;
@@ -2856,8 +2766,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_063: Did not find an object id for component with objectid="
 										+ objectid + " in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_063\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-								fxmlErrorReturn += "Did not find an object id for component with objectid=" + objectid
-										+ " in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for component with objectid=" + objectid
+										+ " in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_063");
 								ierCnt++;
@@ -2870,24 +2780,23 @@ public class FileStructureCheck {
 					}
 					nl = doc.getElementsByTagNameNS(sns, "slicestack");
 					nObj = doc.getElementsByTagName("object");
-					boolean fndObj = false;
+					Set<String> localSliceIds = new HashSet<String>();
+					int sliceCount = nl.getLength();
+					for (int ic = 0; ic < sliceCount; ic++)
+						localSliceIds.add(nl.item(ic).getAttributes().getNamedItem("id").getTextContent().trim());
+					int sliceObjectCount = nObj.getLength();
 					String sId = "";
-					for (int ico = 0; ico < nObj.getLength(); ico++) {
+					for (int ico = 0; ico < sliceObjectCount; ico++) {
 						Node defOb = nObj.item(ico);
 						if (defOb.getAttributes().getNamedItemNS(sns, "slicestackid") != null) {
 							sId = defOb.getAttributes().getNamedItemNS(sns, "slicestackid").getTextContent().trim();
 							ssIdListRef.add(ename + "|" + sId);
-							for (int ic = 0; ic < nl.getLength(); ic++) {
-								Node defN = nl.item(ic);
-								if (sId.contentEquals(defN.getAttributes().getNamedItem("id").getTextContent()))
-									fndObj = true;
-							}
-							if (!fndObj) {
+							if (!localSliceIds.contains(sId)) {
 								fErrorReturn += "<br>ER_064: Did not find an slicestack id for object with slicestackid="
 										+ sId + " in " + ename + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_064\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-								fxmlErrorReturn += "Did not find an slicestack id for object with slicestackid=" + sId
-										+ " in " + ename;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an slicestack id for object with slicestackid=" + sId
+										+ " in " + ename);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_064");
 								ierCnt++;
@@ -2922,8 +2831,8 @@ public class FileStructureCheck {
 								fErrorReturn += "<br>ER_065: Duplicate id " + oUid + namelist.get(ic)
 										+ " Must be unique across the resources in the model part.";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_065\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-								fxmlErrorReturn += "Duplicate id " + oUid + namelist.get(ic)
-										+ " Must be unique across the resources in the model part.";
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate id " + oUid + namelist.get(ic)
+										+ " Must be unique across the resources in the model part.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_065");
 								ierCnt++;
@@ -2955,8 +2864,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_066: Duplicate object id: " + stst + " in file: " + ename
 								+ " Must be unique across the resources in the model part.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_066\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Duplicate object id: " + stst + " in file: " + ename
-								+ " Must be unique across the resources in the model part.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate object id: " + stst + " in file: " + ename
+								+ " Must be unique across the resources in the model part.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_066");
 						ierCnt++;
@@ -2974,6 +2883,8 @@ public class FileStructureCheck {
 					}
 				} // end of models looping
 			}
+			geometry.finish(sRootModel);
+			modelRules.finish(sRootModel);
 			for (int i = 0; i < bentryNames.size(); i++) {
 				if (!bentryNames.get(i)) {
 					String addCom = "";
@@ -2993,7 +2904,7 @@ public class FileStructureCheck {
 					logger.info("Entry " + entryNames.get(i));
 					fWarningReturn += "<br>WR_009: Did not find a target for " + entryNames.get(i) + addCom + "<br>";
 					fxmlWarningReturn += "<Issue  issueID=\"WR_009\" severity=\"info\" class=\"structure\" type=\"orphaned item\">";
-					fxmlWarningReturn += "Did not find a target for " + entryNames.get(i) + addCom;
+					fxmlWarningReturn += StringEscapeUtils.escapeXml10("Did not find a target for " + entryNames.get(i) + addCom);
 					fxmlWarningReturn += "</Issue>";
 					errChk("WR_009");
 					iwrCnt++;
@@ -3010,8 +2921,8 @@ public class FileStructureCheck {
 					fWarningReturn += "<br>WR_010: Could not find a use/reference for object id " + tst[1]
 							+ " located in file " + tst[0] + "<br>";
 					fxmlWarningReturn += "<Issue  issueID=\"WR_010\" severity=\"info\" class=\"structure\" type=\"orphaned item\">";
-					fxmlWarningReturn += "Could not find a use/reference for object id " + tst[1] + " located in file "
-							+ tst[0];
+					fxmlWarningReturn += StringEscapeUtils.escapeXml10("Could not find a use/reference for object id " + tst[1] + " located in file "
+							+ tst[0]);
 					fxmlWarningReturn += "</Issue>";
 					errChk("WR_010");
 					iwrCnt++;
@@ -3030,8 +2941,8 @@ public class FileStructureCheck {
 					fWarningReturn += "<br>WR_011: Could not find a use/reference for slicestack id " + tst[1]
 							+ " located in file " + tst[0] + "<br>";
 					fxmlWarningReturn += "<Issue  issueID=\"WR_011\" severity=\"info\" class=\"structure\" type=\"orphaned item\">";
-					fxmlWarningReturn += "Could not find a use/reference for slicestack id " + tst[1]
-							+ " located in file " + tst[0];
+					fxmlWarningReturn += StringEscapeUtils.escapeXml10("Could not find a use/reference for slicestack id " + tst[1]
+							+ " located in file " + tst[0]);
 					fxmlWarningReturn += "</Issue>";
 					errChk("WR_011");
 					iwrCnt++;
@@ -3052,8 +2963,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_070: Duplicate UUID: " + oUid + " in file: " + fileUuid.get(ic)
 									+ " Must be unique across package.";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_070\" severity=\"low\" class=\"structure\" type=\"UUID error\">";
-							fxmlErrorReturn += "Duplicate UUID: " + oUid + " in file: " + fileUuid.get(ic)
-									+ " Must be unique across package.";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Duplicate UUID: " + oUid + " in file: " + fileUuid.get(ic)
+									+ " Must be unique across package.");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_070");
 							bfnd = true;
@@ -3075,6 +2986,15 @@ public class FileStructureCheck {
 			// Check for 2d slices with bad transforms
 			if (b2dSlices && transformErrorLoc.size() > 0) {
 				for (String trs : transformErrorLoc) {
+					// Slice-only restrictions must affect XML and error status only
+					// when slice data is present, just like the HTML diagnostics.
+					String code = trs.substring(0, 6);
+					String message = trs.substring(8).replace("&", "&amp;")
+							.replace("<", "&lt;").replace(">", "&gt;");
+					fxmlErrorReturn += "<Issue issueID=\"" + code
+							+ "\" severity=\"moderate\" class=\"structure\" type=\"invalid transform\">"
+							+ message + "</Issue>";
+					errChk(code);
 					fErrorReturn += "<br>" + trs;
 					ierCnt++;
 					if (ierCnt > iErrMaxStr) {
@@ -3084,11 +3004,15 @@ public class FileStructureCheck {
 				}
 			}
 
-		} catch (ArrayIndexOutOfBoundsException | NullPointerException | IOException | SAXException
+		} catch (IndexOutOfBoundsException | NullPointerException | IOException | SAXException
 				| ParserConfigurationException ex) {
+			if (ex instanceof SAXException && ex.getMessage() != null && ex.getMessage().contains("DOCTYPE")) {
+				structureIssue("ER_186", "XML DTD", "DTD content is not permitted in package XML.");
+				return;
+			}
 			fErrorReturn += "<br>ER_077: Caught an exception: " + ex.getMessage() + "<br>";
 			fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-			fxmlErrorReturn += "Caught an exception: " + ex.getMessage();
+			fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + ex.getMessage());
 			fxmlErrorReturn += "</Issue>";
 			errChk("ER_077");
 			ex.printStackTrace();
@@ -3170,8 +3094,8 @@ public class FileStructureCheck {
 							fWarningReturn += "<br>WR_001: Duplicate base name: " + smid + " in basematerials id: "
 									+ bid + ", in file: " + file + ". Should be unique.";
 							fxmlWarningReturn += "<Issue  issueID=\"WR_001\" severity=\"info\" class=\"structure\" type=\"uniqueness warning\">";
-							fxmlWarningReturn += "Duplicate base name: " + smid + " in basematerials id: " + bid
-									+ ", in file: " + file + ". Should be unique.";
+							fxmlWarningReturn += StringEscapeUtils.escapeXml10("Duplicate base name: " + smid + " in basematerials id: " + bid
+									+ ", in file: " + file + ". Should be unique.");
 							fxmlWarningReturn += "</Issue>";
 							errChk("WR_001");
 							iwrCnt++;
@@ -3222,8 +3146,8 @@ public class FileStructureCheck {
 								+ file + ", has an target of " + ltarg
 								+ " which is an invalid relationship for textures.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_111\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "texture2d path: " + lpath + ", with id: " + bid + ", in file: " + file
-								+ ", has an target of " + ltarg + " which is an invalid relationship for textures.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("texture2d path: " + lpath + ", with id: " + bid + ", in file: " + file
+								+ ", has an target of " + ltarg + " which is an invalid relationship for textures.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_111");
 						ierCnt++;
@@ -3237,8 +3161,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_113: Texture2d Reference for " + lpath
 								+ " not found in associated rels file as specified in the path in " + file + "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_113\" severity=\"high\" class=\"structure\" type=\"path error\">";
-						fxmlErrorReturn += "Texture2d Reference for " + lpath
-								+ " not found in associated rels file as specified in the path in " + file;
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Texture2d Reference for " + lpath
+								+ " not found in associated rels file as specified in the path in " + file);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_113");
 						ierCnt++;
@@ -3259,8 +3183,8 @@ public class FileStructureCheck {
 							fWarningReturn += "<br>WR_018: texture2d box attribute in " + file
 									+ " present with non-default values, may be ignored by consumers.<br>";
 							fxmlWarningReturn += "<Issue  issueID=\"WR_018\" severity=\"info\" class=\"structure\" type=\"bounds limit\">";
-							fxmlWarningReturn += "texture2d box attribute in " + file
-									+ " present with non-default values, may be ignored by consumers.";
+							fxmlWarningReturn += StringEscapeUtils.escapeXml10("texture2d box attribute in " + file
+									+ " present with non-default values, may be ignored by consumers.");
 							fxmlWarningReturn += "</Issue>";
 							errChk("WR_008");
 							iwrCnt++;
@@ -3291,8 +3215,8 @@ public class FileStructureCheck {
 								+ ", in file: " + file + " appears before the definition of the texture2d.";
 
 						fxmlErrorReturn += "<Issue  issueID=\"ER_078\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-						fxmlErrorReturn += "texture2dgroup texid: " + tbid + ", in texture2dgroup id: " + bid
-								+ ", in file: " + file + " appears before the definition of the texture2d.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("texture2dgroup texid: " + tbid + ", in texture2dgroup id: " + bid
+								+ ", in file: " + file + " appears before the definition of the texture2d.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_078");
 						ierCnt++;
@@ -3332,8 +3256,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_079: compositematerials matid: " + tbid + ", in compositematerials id: "
 								+ bid + ", in file: " + file + " appears before the definition of the basematerials.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_079\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-						fxmlErrorReturn += "compositematerials matid: " + tbid + ", in compositematerials id: " + bid
-								+ ", in file: " + file + " appears before the definition of the basematerials.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("compositematerials matid: " + tbid + ", in compositematerials id: " + bid
+								+ ", in file: " + file + " appears before the definition of the basematerials.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_079");
 						ierCnt++;
@@ -3359,10 +3283,10 @@ public class FileStructureCheck {
 										+ " with matindices: " + mtbid + ", has an index of " + sis
 										+ " which exceeds the base count in the basematerials.";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_080\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-								fxmlErrorReturn += "compositematerials matid: " + tbid + ", in compositematerials id: "
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("compositematerials matid: " + tbid + ", in compositematerials id: "
 										+ bid + ", in file: " + file + " with matindices: " + mtbid
 										+ ", has an index of " + sis
-										+ " which exceeds the base count in the basematerials.";
+										+ " which exceeds the base count in the basematerials.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_080");
 								ierCnt++;
@@ -3390,9 +3314,9 @@ public class FileStructureCheck {
 											+ ", with values " + sval + " and a summation of "
 											+ Math.round(ftot * 1000000.0) / 1000000.0 + " does not sum to 1.0";
 									fxmlWarningReturn += "<Issue  issueID=\"WR_004\" severity=\"info\" class=\"structure\" type=\"range warning\">";
-									fxmlWarningReturn += "#" + icnt + " composite, under compositematerials id: " + bid
+									fxmlWarningReturn += StringEscapeUtils.escapeXml10("#" + icnt + " composite, under compositematerials id: " + bid
 											+ ", in file: " + file + ", with values " + sval + " and a summation of "
-											+ Math.round(ftot * 1000000.0) / 1000000.0 + " does not sum to 1.0";
+											+ Math.round(ftot * 1000000.0) / 1000000.0 + " does not sum to 1.0");
 									fxmlWarningReturn += "</Issue>";
 									errChk("WR_004");
 									iwrCnt++;
@@ -3408,9 +3332,9 @@ public class FileStructureCheck {
 											+ " with matindices " + mtbid + " has " + svals.length
 											+ " indicies which does not match the count in matindicies.";
 									fxmlWarningReturn += "<Issue  issueID=\"WR_005\" severity=\"info\" class=\"structure\" type=\"index warning\">";
-									fxmlWarningReturn += "#" + icnt + " composite, under compositematerials id: " + bid
+									fxmlWarningReturn += StringEscapeUtils.escapeXml10("#" + icnt + " composite, under compositematerials id: " + bid
 											+ ", in file: " + file + " with matindices " + mtbid + " has "
-											+ svals.length + " indicies which does not match the count in matindicies.";
+											+ svals.length + " indicies which does not match the count in matindicies.");
 									fxmlWarningReturn += "</Issue>";
 									errChk("WR_005");
 									iwrCnt++;
@@ -3447,8 +3371,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_081: multiproperties with id: " + bid + ", pids reference: " + sp
 									+ ", in file: " + file + " does not yet exist.";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_081\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-							fxmlErrorReturn += "multiproperties with id: " + bid + ", pids reference: " + sp
-									+ ", in file: " + file + " does not yet exist.";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("multiproperties with id: " + bid + ", pids reference: " + sp
+									+ ", in file: " + file + " does not yet exist.");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_081");
 							ierCnt++;
@@ -3461,7 +3385,7 @@ public class FileStructureCheck {
 								ibaseComp++;
 								// System.out.println(ibaseComp);
 								if (multiCount >= 1) {
-									fErrorReturn += "Basematerials or Compositematerials is above first layer in multiproperties";
+									structureIssue("ER_188", "material ordering", "Base or composite material must be the first layer in multiproperties " + bid + " in " + file);
 								}
 							}
 							if (name.equals("colorgroup"))
@@ -3471,9 +3395,9 @@ public class FileStructureCheck {
 										+ sp + ", in file: " + file
 										+ " has referenced another multiproperties id, which is not allowed.";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_082\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-								fxmlErrorReturn += "multiproperties with id: " + bid + ", pids reference: " + sp
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("multiproperties with id: " + bid + ", pids reference: " + sp
 										+ ", in file: " + file
-										+ " has referenced another multiproperties id, which is not allowed.";
+										+ " has referenced another multiproperties id, which is not allowed.");
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_082");
 								ierCnt++;
@@ -3490,8 +3414,8 @@ public class FileStructureCheck {
 								+ ", in file: " + file
 								+ " has more than one reference to a basematerials and/or compositematerials, which is not allowed.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_083\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "multiproperties with id: " + bid + ", pids: " + pids + ", in file: " + file
-								+ " has more than one reference to a basematerials and/or compositematerials, which is not allowed.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("multiproperties with id: " + bid + ", pids: " + pids + ", in file: " + file
+								+ " has more than one reference to a basematerials and/or compositematerials, which is not allowed.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_083");
 						ierCnt++;
@@ -3505,8 +3429,8 @@ public class FileStructureCheck {
 								+ ", in file: " + file
 								+ " has more than one reference to a colorgroup, which is not allowed.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_084\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "multiproperties with id: " + bid + ", pids: " + pids + ", in file: " + file
-								+ " has more than one reference to a colorgroup, which is not allowed.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("multiproperties with id: " + bid + ", pids: " + pids + ", in file: " + file
+								+ " has more than one reference to a colorgroup, which is not allowed.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_084");
 						ierCnt++;
@@ -3530,9 +3454,9 @@ public class FileStructureCheck {
 										+ ", in file: " + file + ", with " + spind.length
 										+ " indices which does not match the count in pids of " + pids + ".";
 								fxmlWarningReturn += "<Issue  issueID=\"WR_006\" severity=\"info\" class=\"structure\" type=\"index warning\">";
-								fxmlWarningReturn += "#" + icnt + " multi, under multiproperties id: " + bid
+								fxmlWarningReturn += StringEscapeUtils.escapeXml10("#" + icnt + " multi, under multiproperties id: " + bid
 										+ ", in file: " + file + ", with " + spind.length
-										+ " indices which does not match the count in pids of " + pids + ".";
+										+ " indices which does not match the count in pids of " + pids + ".");
 								fxmlWarningReturn += "</Issue>";
 								errChk("WR_006");
 								iwrCnt++;
@@ -3553,9 +3477,9 @@ public class FileStructureCheck {
 												+ spids[ic] + ", with index: " + tst + ", in file: " + file
 												+ " does not exist yet.";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_085\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-										fxmlErrorReturn += "#" + icnt + " multi, under multiproperties with id: " + bid
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("#" + icnt + " multi, under multiproperties with id: " + bid
 												+ ", pids id: " + spids[ic] + ", with index: " + tst + ", in file: "
-												+ file + " does not exist yet.";
+												+ file + " does not exist yet.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_085");
 										ierCnt++;
@@ -3573,10 +3497,10 @@ public class FileStructureCheck {
 													+ " exceeds the number of items in " + idWithName.get(spids[ic])
 													+ ".";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_086\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "#" + icnt + " multi, under multiproperties with id: "
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("#" + icnt + " multi, under multiproperties with id: "
 													+ bid + ", pids id: " + spids[ic] + ", with index: " + tst
 													+ ", in file: " + file + " exceeds the number of items in "
-													+ idWithName.get(spids[ic]) + ".";
+													+ idWithName.get(spids[ic]) + ".");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_086");
 											ierCnt++;
@@ -3605,9 +3529,9 @@ public class FileStructureCheck {
 								+ node.getAttributes().getNamedItem("pindex") + " but missing a defined pid"
 								+ ", in file: " + file;
 						fxmlErrorReturn += "<Issue  issueID=\"ER_087\" severity=\"hig\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "object with id: " + node.getAttributes().getNamedItem("id").getTextContent()
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("object with id: " + node.getAttributes().getNamedItem("id").getTextContent()
 								+ " and " + node.getAttributes().getNamedItem("pindex") + " but missing a defined pid"
-								+ ", in file: " + file;
+								+ ", in file: " + file);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_087");
 						ierCnt++;
@@ -3625,9 +3549,9 @@ public class FileStructureCheck {
 									+ node.getAttributes().getNamedItem("id").getTextContent() + ", pid: " + pid
 									+ ", in file: " + file + " does not yet exist.";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_088\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-							fxmlErrorReturn += "object with id: "
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("object with id: "
 									+ node.getAttributes().getNamedItem("id").getTextContent() + ", pid: " + pid
-									+ ", in file: " + file + " does not yet exist.";
+									+ ", in file: " + file + " does not yet exist.");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_088");
 							ierCnt++;
@@ -3646,10 +3570,10 @@ public class FileStructureCheck {
 											+ ", in file: " + file + " has a pindex of " + tst2
 											+ " which exceeds the index count of " + ichk + " for " + name + ".";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "object with id: "
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("object with id: "
 											+ node.getAttributes().getNamedItem("id").getTextContent() + ", pid: " + pid
 											+ ", in file: " + file + " has a pindex of " + tst2
-											+ " which exceeds the index count of " + ichk + " for " + name + ".";
+											+ " which exceeds the index count of " + ichk + " for " + name + ".");
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_089");
 									ierCnt++;
@@ -3738,9 +3662,9 @@ public class FileStructureCheck {
 													+ ivert + " is less than the required 3 vertices" + " in file: "
 													+ file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_114\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "<br>ER_114: Triangle defined in object but number of vertices: "
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_114: Triangle defined in object but number of vertices: "
 													+ ivert + " is less than the required 3 vertices" + " in file: "
-													+ file;
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_114");
 											ierCnt++;
@@ -3789,9 +3713,9 @@ public class FileStructureCheck {
 													+ " is greater than the number of availalbe (zero based) vertices: "
 													+ ivert + " in file: " + file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "Triangle with v1=" + tst
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with v1=" + tst
 													+ " is greater than the number of availalbe (zero based) vertices: "
-													+ ivert + " in file: " + file;
+													+ ivert + " in file: " + file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_090");
 											ierCnt++;
@@ -3808,8 +3732,8 @@ public class FileStructureCheck {
 											fWarningReturn += "<br>WR_016: Triangle: " + itrg + " in file: " + file
 													+ " uses duplicate references to the same vertex " + tst + ".";
 											fxmlWarningReturn += "<Issue  issueID=\"WR_014\" severity=\"info\" class=\"structure\" type=\"Vertex warning\">";
-											fxmlWarningReturn += "Triangle: " + itrg + " in file: " + file
-													+ " uses duplicate references to the same vertex " + tst + ".";
+											fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: " + itrg + " in file: " + file
+													+ " uses duplicate references to the same vertex " + tst + ".");
 											fxmlWarningReturn += "</Issue>";
 											errChk("WR_016");
 											iwrCnt++;
@@ -3827,9 +3751,9 @@ public class FileStructureCheck {
 													+ ivert + " in file: " + file;
 
 											fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "Triangle with v2=" + tst
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with v2=" + tst
 													+ " is greater than the number of availalbe (zero based) vertices: "
-													+ ivert + " in file: " + file;
+													+ ivert + " in file: " + file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_091");
 											ierCnt++;
@@ -3845,8 +3769,8 @@ public class FileStructureCheck {
 											fWarningReturn += "<br>WR_016: Triangle: " + itrg + " in file: " + file
 													+ " uses duplicate references to the same vertex " + tst + ".";
 											fxmlWarningReturn += "<Issue  issueID=\"WR_014\" severity=\"info\" class=\"structure\" type=\"Vertex warning\">";
-											fxmlWarningReturn += "Triangle: " + itrg + " in file: " + file
-													+ " uses duplicate references to the same vertex " + tst + ".";
+											fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: " + itrg + " in file: " + file
+													+ " uses duplicate references to the same vertex " + tst + ".");
 											fxmlWarningReturn += "</Issue>";
 											errChk("WR_016");
 											iwrCnt++;
@@ -3864,9 +3788,9 @@ public class FileStructureCheck {
 													+ ivert + " in file: " + file;
 
 											fxmlErrorReturn += "<Issue  issueID=\"ER_092\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "Triangle with v3=" + tst
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with v3=" + tst
 													+ " is greater than the number of availalbe (zero based) vertices: "
-													+ ivert + " in file: " + file;
+													+ ivert + " in file: " + file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_092");
 											ierCnt++;
@@ -3887,12 +3811,12 @@ public class FileStructureCheck {
 													+ "  in file: " + file + " with object id: " + objId
 													+ " has p1 and pid defined but does not have the pid or pindex defined in the object.";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_104\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-											fxmlErrorReturn += "Triangle with p1="
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with p1="
 													+ vnode.getAttributes().getNamedItem("p1").getTextContent()
 													+ " and pid="
 													+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 													+ "  in file: " + file + " with object id: " + objId
-													+ " has p1 and pid defined but does not have the pid or pindex defined in the object.";
+													+ " has p1 and pid defined but does not have the pid or pindex defined in the object.");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_104");
 											ierCnt++;
@@ -3912,12 +3836,12 @@ public class FileStructureCheck {
 													+ "  in file: " + file + " with object id: " + objId
 													+ " has p1 and pid defined but does not have the pid defined in the object.";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_105\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-											fxmlErrorReturn += "Triangle with p1="
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with p1="
 													+ vnode.getAttributes().getNamedItem("p1").getTextContent()
 													+ " and pid="
 													+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 													+ "  in file: " + file + " with object id: " + objId
-													+ " has p1 and pid defined but does not have the pid defined in the object.";
+													+ " has p1 and pid defined but does not have the pid defined in the object.");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_105");
 											ierCnt++;
@@ -3936,12 +3860,12 @@ public class FileStructureCheck {
 													+ "  in file: " + file + " with object id: " + objId
 													+ " has p1 and pid defined but does not have the pindex defined in the object.";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_106\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-											fxmlErrorReturn += "Triangle with p1="
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with p1="
 													+ vnode.getAttributes().getNamedItem("p1").getTextContent()
 													+ " and pid="
 													+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 													+ "  in file: " + file + " with object id: " + objId
-													+ " has p1 and pid defined but does not have the pindex defined in the object.";
+													+ " has p1 and pid defined but does not have the pindex defined in the object.");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_106");
 											ierCnt++;
@@ -3964,8 +3888,8 @@ public class FileStructureCheck {
 											fWarningReturn += "<br>WR_014: Triangle: " + sadd + " in file: " + file
 													+ " does not define p1 while p2 and/or p3 have been set.";
 											fxmlWarningReturn += "<Issue  issueID=\"WR_014\" severity=\"info\" class=\"structure\" type=\"ID warning\">";
-											fxmlWarningReturn += "Triangle: " + sadd + " in file: " + file
-													+ " does not define p1 while p2 and/or p3 have been set.";
+											fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: " + sadd + " in file: " + file
+													+ " does not define p1 while p2 and/or p3 have been set.");
 											fxmlWarningReturn += "</Issue>";
 											errChk("WR_014");
 											iwrCnt++;
@@ -3988,10 +3912,10 @@ public class FileStructureCheck {
 										 * vnode.getAttributes().getNamedItem("p3"); } fWarningReturn +=
 										 * "<br>WR_015: Triangle: " + sadd + " in file: " + file +
 										 * " defines p1 while either p2 or p3 have not been set."; fxmlWarningReturn +=
-										 * "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
-										 * ; fxmlWarningReturn += "Triangle: " + sadd + " in file: " + file +
-										 * " defines p1 while either p2 or p3 have not been set."; fxmlWarningReturn +=
-										 * "</Issue>"; errChk("WR_015"); iwrCnt++; if (iwrCnt > iWrnMaxStr) {
+										 StringEscapeUtils.escapeXml10(* "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
+										 * ); fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: " + sadd + " in file: " + file +
+										 * " defines p1 while either p2 or p3 have not been set."); fxmlWarningReturn +=
+										 StringEscapeUtils.escapeXml10(* "</Issue>"); errChk("WR_015"); iwrCnt++; if (iwrCnt > iWrnMaxStr) {
 										 * fWarningReturn += "<br>More than " + iWrnMaxStr +
 										 * " warnings found, stopping..<br>"; return; } } if
 										 * (vnode.getAttributes().getNamedItem("p1") == null &&
@@ -3999,9 +3923,9 @@ public class FileStructureCheck {
 										 * vnode.getAttributes().getNamedItem("pid").getTextContent().trim();
 										 * fWarningReturn += "<br>WR_015: Triangle: with pid=" + tst + " in file: " +
 										 * file + " has not defined p1."; fxmlWarningReturn +=
-										 * "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
-										 * ; fxmlWarningReturn += "Triangle: with pid=" + tst + " in file: " + file +
-										 * " has not defined p1."; fxmlWarningReturn += "</Issue>"; errChk("WR_015");
+										 StringEscapeUtils.escapeXml10(* "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
+										 * ); fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: with pid=" + tst + " in file: " + file +
+										 * " has not defined p1."); fxmlWarningReturn += "</Issue>"; errChk("WR_015");
 										 * iwrCnt++; if (iwrCnt > iWrnMaxStr) { fWarningReturn += "<br>More than " +
 										 * iWrnMaxStr + " warnings found, stopping..<br>"; return; } } if
 										 * (vnode.getAttributes().getNamedItem("p2") == null &&
@@ -4009,9 +3933,9 @@ public class FileStructureCheck {
 										 * vnode.getAttributes().getNamedItem("pid").getTextContent().trim();
 										 * fWarningReturn += "<br>WR_015: Triangle: with pid=" + tst + " in file: " +
 										 * file + " has not defined p2."; fxmlWarningReturn +=
-										 * "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
-										 * ; fxmlWarningReturn += "Triangle: with pid=" + tst + " in file: " + file +
-										 * " has not defined p2."; fxmlWarningReturn += "</Issue>"; errChk("WR_015");
+										 StringEscapeUtils.escapeXml10(* "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
+										 * ); fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: with pid=" + tst + " in file: " + file +
+										 * " has not defined p2."); fxmlWarningReturn += "</Issue>"; errChk("WR_015");
 										 * iwrCnt++; if (iwrCnt > iWrnMaxStr) { fWarningReturn += "<br>More than " +
 										 * iWrnMaxStr + " warnings found, stopping..<br>"; return; } } if
 										 * (vnode.getAttributes().getNamedItem("p3") == null &&
@@ -4019,9 +3943,9 @@ public class FileStructureCheck {
 										 * vnode.getAttributes().getNamedItem("pid").getTextContent().trim();
 										 * fWarningReturn += "<br>WR_015: Triangle: with pid=" + tst + " in file: " +
 										 * file + " has not defined p3."; fxmlWarningReturn +=
-										 * "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
-										 * ; fxmlWarningReturn += "Triangle: with pid=" + tst + " in file: " + file +
-										 * " has not defined p3."; fxmlWarningReturn += "</Issue>"; errChk("WR_015");
+										 StringEscapeUtils.escapeXml10(* "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">"
+										 * ); fxmlWarningReturn += StringEscapeUtils.escapeXml10("Triangle: with pid=" + tst + " in file: " + file +
+										 * " has not defined p3."); fxmlWarningReturn += "</Issue>"; errChk("WR_015");
 										 * iwrCnt++; if (iwrCnt > iWrnMaxStr) { fWarningReturn += "<br>More than " +
 										 * iWrnMaxStr + " warnings found, stopping..<br>"; return; } }
 										 */
@@ -4032,8 +3956,8 @@ public class FileStructureCheck {
 												fErrorReturn += "<br>ER_097: Triangle with pid=" + tst + " in file: "
 														+ file + " does not exist yet.";
 												fxmlErrorReturn += "<Issue  issueID=\"ER_097\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-												fxmlErrorReturn += "Triangle with pid=" + tst + " in file: " + file
-														+ " does not exist yet.";
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with pid=" + tst + " in file: " + file
+														+ " does not exist yet.");
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_097");
 												ierCnt++;
@@ -4053,10 +3977,10 @@ public class FileStructureCheck {
 																+ " exceeds the number of items in "
 																+ idWithName.get(tst) + ".";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_098\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-														fxmlErrorReturn += "Triangle with pid=" + tst + " p1=" + tst2
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with pid=" + tst + " p1=" + tst2
 																+ " in file: " + file
 																+ " exceeds the number of items in "
-																+ idWithName.get(tst) + ".";
+																+ idWithName.get(tst) + ".");
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_098");
 														ierCnt++;
@@ -4076,10 +4000,10 @@ public class FileStructureCheck {
 																+ " exceeds the number of items in "
 																+ idWithName.get(tst) + ".";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_099\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-														fxmlErrorReturn += "Triangle with pid=" + tst + " p2=" + tst2
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with pid=" + tst + " p2=" + tst2
 																+ " in file: " + file
 																+ " exceeds the number of items in "
-																+ idWithName.get(tst) + ".";
+																+ idWithName.get(tst) + ".");
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_099");
 														ierCnt++;
@@ -4099,10 +4023,10 @@ public class FileStructureCheck {
 																+ " exceeds the number of items in "
 																+ idWithName.get(tst) + ".";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_100\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-														fxmlErrorReturn += "Triangle with pid=" + tst + " p3=" + tst2
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle with pid=" + tst + " p3=" + tst2
 																+ " in file: " + file
 																+ " exceeds the number of items in "
-																+ idWithName.get(tst) + ".";
+																+ idWithName.get(tst) + ".");
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_100");
 														ierCnt++;
@@ -4121,7 +4045,7 @@ public class FileStructureCheck {
 						} catch (Exception et) {
 							fErrorReturn += "<br>ER_077: Caught an exception: " + et.getMessage() + "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-							fxmlErrorReturn += "Caught an exception: " + et.getMessage();
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + et.getMessage());
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_077");
 							et.printStackTrace();
@@ -4143,8 +4067,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_115: Triangle Set name must not be empty"
 													+ " in file: " + file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_115\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "Triangle Set name must not be empty" + " in file: "
-													+ file;
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle Set name must not be empty" + " in file: "
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_115");
 											ierCnt++;
@@ -4165,9 +4089,9 @@ public class FileStructureCheck {
 															+ " is greater than the number of availalbe triangles: "
 															+ itrg + " in file: " + file;
 													fxmlErrorReturn += "<Issue  issueID=\"ER_116\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Triangle Set with Triangle=" + refIndex
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Triangle Set with Triangle=" + refIndex
 															+ " is greater than the number of availalbe triangles: "
-															+ itrg + " in file: " + file;
+															+ itrg + " in file: " + file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_116");
 													ierCnt++;
@@ -4189,10 +4113,10 @@ public class FileStructureCheck {
 															+ " has end index smaller than start index " + " in file: "
 															+ file;
 													fxmlErrorReturn += "<Issue  issueID=\"ER_117\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "refrange with start index " + startIndex
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("refrange with start index " + startIndex
 															+ " and endindex " + endIndex
 															+ " has end index smaller than start index" + " in file: "
-															+ file;
+															+ file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_117");
 													ierCnt++;
@@ -4207,9 +4131,9 @@ public class FileStructureCheck {
 															+ " is greater than the number of availalbe triangles: "
 															+ itrg + " in file: " + file;
 													fxmlErrorReturn += "<Issue  issueID=\"ER_118\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "refrange with end inxex= " + endIndex
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("refrange with end inxex= " + endIndex
 															+ " is greater than the number of availalbe triangles: "
-															+ itrg + " in file: " + file;
+															+ itrg + " in file: " + file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_118");
 													ierCnt++;
@@ -4227,7 +4151,7 @@ public class FileStructureCheck {
 						} catch (Exception et) {
 							fErrorReturn += "<br>ER_077: Caught an exception: " + et.getMessage() + "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-							fxmlErrorReturn += "Caught an exception: " + et.getMessage();
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + et.getMessage());
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_077");
 							et.printStackTrace();
@@ -4267,8 +4191,8 @@ public class FileStructureCheck {
 											+ " cannot point to the same mesh it is inside: " + objID + " in file: "
 											+ file;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_119\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
-											+ " points to the mesh it is inside of " + objID + " in file: " + file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
+											+ " points to the mesh it is inside of " + objID + " in file: " + file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_119");
 									ierCnt++;
@@ -4310,9 +4234,9 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_131: mirrormesh with originalmesh: " + orMesh
 													+ " has a component refrence in originalmesh" + " in file: " + file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_131\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 													+ " has a component refrence in original mesh" + " in file: "
-													+ file;
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_131");
 											ierCnt++;
@@ -4329,8 +4253,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_130: mirrormesh with originalmesh: " + orMesh
 											+ " has no mesh element in original mesh" + " in file: " + file;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_130\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
-											+ " has no mesh element in original mesh" + " in file: " + file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
+											+ " has no mesh element in original mesh" + " in file: " + file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_130");
 									ierCnt++;
@@ -4348,9 +4272,9 @@ public class FileStructureCheck {
 													+ " has originalmesh that includes a mirror mesh" + " in file: "
 													+ file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_126\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 													+ " has originalmesh that includes a mirror mesh" + " in file: "
-													+ file;
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_126");
 											ierCnt++;
@@ -4440,11 +4364,11 @@ public class FileStructureCheck {
 													+ " either make both zero, or make them the same as the original mesh"
 													+ " in file: " + file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_127\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 													+ " has vertex count " + ivert + " not equal to zero when"
 													+ " triangle count " + itrg + " is equal to zero"
 													+ " Original mesh data will be used for object generation instead of mirror mesh data."
-													+ " in file: " + file;
+													+ " in file: " + file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_127");
 											ierCnt++;
@@ -4461,11 +4385,11 @@ public class FileStructureCheck {
 													+ " either make both zero, or make them the same as the original mesh"
 													+ " in file: " + file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_128\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 													+ " has triangle count " + itrg + " not equal to zero when"
 													+ " vertex count " + ivert + " is equal to zero"
 													+ " Original mesh data will be used for object generation instead of mirror mesh data."
-													+ " in file: " + file;
+													+ " in file: " + file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_128");
 											ierCnt++;
@@ -4484,11 +4408,11 @@ public class FileStructureCheck {
 												+ " this may be intentional for some test cases." + " in file: " + file
 												+ ". Original mesh data will be used for object generation instead of mirror mesh data.";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_120\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 												+ " has vertex count " + ivert
 												+ " different from original object vertex count " + origVertCount
 												+ " in file: " + file
-												+ ". Original mesh data will be used for object generation instead of mirror mesh data.";
+												+ ". Original mesh data will be used for object generation instead of mirror mesh data.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_120");
 										ierCnt++;
@@ -4506,11 +4430,11 @@ public class FileStructureCheck {
 												+ " Original mesh data will be used for object generation instead of mirror mesh data."
 												+ " in file: " + file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_121\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 												+ " has triangle count " + itrg
 												+ " different from original object triangle count " + origTriCount
 												+ " Original mesh data will be used for object generation instead of mirror mesh data."
-												+ " in file: " + file;
+												+ " in file: " + file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_121");
 										ierCnt++;
@@ -4531,13 +4455,13 @@ public class FileStructureCheck {
 												+ " Original mesh data will be used for object generation instead of mirror mesh data."
 												+ " in file: " + file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_122\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "mirrormesh with originalmesh " + orMesh
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("mirrormesh with originalmesh " + orMesh
 												+ " has triangle count " + itrg
 												+ " different from original object triangle count " + origTriCount
 												+ " and vertex count " + ivert
 												+ " different from original object vertex count " + origVertCount
 												+ " Original mesh data will be used for object generation instead of mirror mesh data."
-												+ " in file: " + file;
+												+ " in file: " + file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_122");
 										ierCnt++;
@@ -4560,11 +4484,11 @@ public class FileStructureCheck {
 														+ originalv2 + ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_123: mirrored triangle " + jj + " with v2: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_123: mirrored triangle " + jj + " with v2: "
 														+ newv2 + " has different v2 from original mesh v2: "
 														+ originalv2
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_123");
 												ierCnt++;
@@ -4583,11 +4507,11 @@ public class FileStructureCheck {
 														+ originalv1 + ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_124\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_090: mirrored triangle " + jj + "with v3: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_090: mirrored triangle " + jj + "with v3: "
 														+ newv3 + " has different v3 from original mesh v1: "
 														+ originalv1
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_124");
 												ierCnt++;
@@ -4606,11 +4530,11 @@ public class FileStructureCheck {
 														+ originalv3 + ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_125: mirrored triangle " + jj + " with v1: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_125: mirrored triangle " + jj + " with v1: "
 														+ newv1 + " has different v1 from original mesh v3: "
 														+ originalv3
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_125");
 												ierCnt++;
@@ -4634,12 +4558,12 @@ public class FileStructureCheck {
 														+ ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_132\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_125: mirrored triangle " + jj + " with p1: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_125: mirrored triangle " + jj + " with p1: "
 														+ origp1.get(jj).toString()
 														+ " has different p1 from original mesh p3: "
 														+ p3.get(jj).toString()
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_132");
 												ierCnt++;
@@ -4658,12 +4582,12 @@ public class FileStructureCheck {
 														+ ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_132\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_125: mirrored triangle " + jj + " with p2: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_125: mirrored triangle " + jj + " with p2: "
 														+ origp2.get(jj).toString()
 														+ " has different p2 from original mesh p2: "
 														+ p2.get(jj).toString()
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_132");
 												ierCnt++;
@@ -4682,12 +4606,12 @@ public class FileStructureCheck {
 														+ ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_132\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_125: mirrored triangle " + jj + " with p3: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_125: mirrored triangle " + jj + " with p3: "
 														+ origp3.get(jj).toString()
 														+ " has different p3 from original mesh p1: "
 														+ p1.get(jj).toString()
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_132");
 												ierCnt++;
@@ -4706,12 +4630,12 @@ public class FileStructureCheck {
 														+ ". This may be intentional for some test cases."
 														+ " in file: " + file;
 												fxmlErrorReturn += "<Issue  issueID=\"ER_132\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "<br>ER_125: mirrored triangle " + jj + " with pid: "
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("<br>ER_125: mirrored triangle " + jj + " with pid: "
 														+ origtripid.get(jj).toString()
 														+ " has different pid from original mesh pid: "
 														+ tripid.get(jj).toString()
 														+ ". Original mesh data will be used for object generation instead of mirror mesh data."
-														+ " in file: " + file;
+														+ " in file: " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_132");
 												ierCnt++;
@@ -4729,7 +4653,7 @@ public class FileStructureCheck {
 						} catch (Exception et) {
 							fErrorReturn += "<br>ER_077: Caught an exception: " + et.getMessage() + "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-							fxmlErrorReturn += "Caught an exception: " + et.getMessage();
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + et.getMessage());
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_077");
 							et.printStackTrace();
@@ -4742,6 +4666,23 @@ public class FileStructureCheck {
 								String objpidChk = "";
 								Node pMesh = cnode.getParentNode();
 								Node pObj = pMesh.getParentNode();
+								// Core defaults an omitted object type to model.
+								String objectType = "model";
+								if (pObj.getAttributes().getNamedItem("type") != null)
+									objectType = pObj.getAttributes().getNamedItem("type").getTextContent().trim();
+								if (!objectType.equals("model") && !objectType.equals("solidsupport")) {
+									String message = "Beamlattice in file: " + file + " with object id: " + objId
+											+ " has object type '" + objectType + "'; only model or solidsupport is allowed.";
+									fErrorReturn += "<br>ER_177: " + message;
+									fxmlErrorReturn += "<Issue issueID=\"ER_177\" severity=\"high\" class=\"structure\" type=\"invalid object type\">"
+											+ message + "</Issue>";
+									errChk("ER_177");
+									ierCnt++;
+									if (ierCnt > iErrMaxStr) {
+										fErrorReturn += "<br>More than " + iErrMaxStr + " errors found, stopping..<br>";
+										return;
+									}
+								}
 								if (pObj.getAttributes().getNamedItem("pid") != null)
 									objpidChk = pObj.getAttributes().getNamedItem("pid").getTextContent().trim();
 
@@ -4761,9 +4702,9 @@ public class FileStructureCheck {
 											+ file + " with object id: " + objId
 											+ " has pid defined but does not have the pid defined in the object.";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "beamlattice with  pid=" + pidBeamLatChk + "  in file: " + file
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("beamlattice with  pid=" + pidBeamLatChk + "  in file: " + file
 											+ " with object id: " + objId
-											+ " has p and pid defined but does not have the pid defined in the object.";
+											+ " has p and pid defined but does not have the pid defined in the object.");
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_089");
 									ierCnt++;
@@ -4787,8 +4728,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_090: Beamlattice missing clippingmesh while clippingmode is not null and not equal to 'none' in file: "
 											+ file;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "Beamlattice missing clippingmesh while clippingmode is not null and not equal to 'none' in file: "
-											+ file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice missing clippingmesh while clippingmode is not null and not equal to 'none' in file: "
+											+ file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_090");
 									ierCnt++;
@@ -4807,8 +4748,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_090: Beamlattice clippingmode while clippingmode is not set to none, inside, or outside in file: "
 											+ file;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "Beamlattice clippingmode while clippingmode is not set to none, inside, or outside in file: "
-											+ file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice clippingmode while clippingmode is not set to none, inside, or outside in file: "
+											+ file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_090");
 									ierCnt++;
@@ -4826,8 +4767,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_090: Beamlattice clippingmesh id matches the id of the container object in file: "
 												+ file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "Beamlattice clippingmesh id matches the id of the container object in file: "
-												+ file;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice clippingmesh id matches the id of the container object in file: "
+												+ file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_090");
 										ierCnt++;
@@ -4841,8 +4782,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_090: Beamlattice clippingmesh id " + cid
 												+ " does not match the id of a container object in file: " + file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "Beamlattice clippingmesh id " + cid
-												+ " does not match the id of a container object in file: " + file;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice clippingmesh id " + cid
+												+ " does not match the id of a container object in file: " + file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_090");
 										ierCnt++;
@@ -4857,9 +4798,9 @@ public class FileStructureCheck {
 													+ " does not map to a container object with type model in file: "
 													+ file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "Beamlattice clippingmesh id " + cid
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice clippingmesh id " + cid
 													+ " does not map to a container object with type model in file: "
-													+ file;
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_090");
 											ierCnt++;
@@ -4874,8 +4815,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_090: Beamlattice clippingmesh id " + cid
 												+ " references a mesh that contains a beamlattice in file: " + file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "Beamlattice clippingmesh id " + cid
-												+ " references a mesh that contains a beamlattice in file: " + file;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice clippingmesh id " + cid
+												+ " references a mesh that contains a beamlattice in file: " + file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_090");
 										ierCnt++;
@@ -4896,8 +4837,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_090: Beamlattice representationmesh id matches the id of the container object in file: "
 												+ file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "Beamlattice representationmesh id matches the id of the container object in file: "
-												+ file;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice representationmesh id matches the id of the container object in file: "
+												+ file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_090");
 										ierCnt++;
@@ -4911,8 +4852,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_090: Beamlattice representationmesh id " + cid
 												+ " does not match the id of a container object in file: " + file;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-										fxmlErrorReturn += "Beamlattice representationmesh id " + cid
-												+ " does not match the id of a container object in file: " + file;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice representationmesh id " + cid
+												+ " does not match the id of a container object in file: " + file);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_090");
 										ierCnt++;
@@ -4927,9 +4868,9 @@ public class FileStructureCheck {
 													+ " does not map to a container object with type model in file: "
 													+ file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-											fxmlErrorReturn += "Beamlattice representationmesh id " + cid
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice representationmesh id " + cid
 													+ " does not map to a container object with type model in file: "
-													+ file;
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_090");
 											ierCnt++;
@@ -4948,8 +4889,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_090: Beamlattice missing ballradius while ballmode is not null and not equal to 'none' in file: "
 											+ file;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "Beamlattice missing ballradius while ballmode is not null and not equal to 'none' in file: "
-											+ file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice missing ballradius while ballmode is not null and not equal to 'none' in file: "
+											+ file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_090");
 									ierCnt++;
@@ -4968,8 +4909,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_090: Beamlattice ballmode while ballmode is not set to none, mixed, or all in file: "
 											+ file;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-									fxmlErrorReturn += "Beamlattice ballmode while ballmode is not set to none, mixed, or all in file: "
-											+ file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice ballmode while ballmode is not set to none, mixed, or all in file: "
+											+ file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_090");
 									ierCnt++;
@@ -4984,8 +4925,8 @@ public class FileStructureCheck {
 										fWarningReturn += "<br>WR_015: Beamlattice: with pid=" + pid + " in file: "
 												+ file + " has not defined pindex.";
 										fxmlWarningReturn += "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">";
-										fxmlWarningReturn += "Beamlattice: with pid=" + pid + " in file: " + file
-												+ " has not defined pindex.";
+										fxmlWarningReturn += StringEscapeUtils.escapeXml10("Beamlattice: with pid=" + pid + " in file: " + file
+												+ " has not defined pindex.");
 										fxmlWarningReturn += "</Issue>";
 										errChk("WR_015");
 										iwrCnt++;
@@ -5000,8 +4941,8 @@ public class FileStructureCheck {
 										fErrorReturn += "<br>ER_088: Beamlattice with pid: " + pid + ", in file: "
 												+ file + " does not yet exist.";
 										fxmlErrorReturn += "<Issue  issueID=\"ER_088\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-										fxmlErrorReturn += "Beamlattice with pid: " + pid + ", in file: " + file
-												+ " does not yet exist.";
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice with pid: " + pid + ", in file: " + file
+												+ " does not yet exist.");
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_088");
 										ierCnt++;
@@ -5022,10 +4963,10 @@ public class FileStructureCheck {
 														+ " which exceeds the index count of " + ichk + " for " + name
 														+ ".";
 												fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-												fxmlErrorReturn += "Beamlattice with pid: " + pid + ", in file: " + file
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamlattice with pid: " + pid + ", in file: " + file
 														+ " has a pindex of " + tst2
 														+ " which exceeds the index count of " + ichk + " for " + name
-														+ ".";
+														+ ".");
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_089");
 												ierCnt++;
@@ -5084,9 +5025,9 @@ public class FileStructureCheck {
 															+ " is greater than the number of availalbe (zero based) vertices: "
 															+ ivert + " in file: " + file;
 													fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Beam with v1=" + tst
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with v1=" + tst
 															+ " is greater than the number of availalbe (zero based) vertices: "
-															+ ivert + " in file: " + file;
+															+ ivert + " in file: " + file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_090");
 													ierCnt++;
@@ -5113,9 +5054,9 @@ public class FileStructureCheck {
 															+ " is greater than the number of availalbe (zero based) vertices: "
 															+ ivert + " in file: " + file;
 													fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Beam with v2=" + tst
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with v2=" + tst
 															+ " is greater than the number of availalbe (zero based) vertices: "
-															+ ivert + " in file: " + file;
+															+ ivert + " in file: " + file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_090");
 													ierCnt++;
@@ -5131,25 +5072,24 @@ public class FileStructureCheck {
 													y2 = verty.get(Integer.parseInt(tst));
 													z2 = vertz.get(Integer.parseInt(tst));
 												}
-												// Check that the length is >=
-												// minlength
+												// Consumers must ignore beams shorter than minlength.
 												Double length = Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)
 														+ (z2 - z1) * (z2 - z1));
 												if (length < minlength) {
-													fErrorReturn += "<br>ER_091: Beam " + (jj + 1)
-															+ " has a length less that the minlength with a length value of "
+													fWarningReturn += "<br>WR_025: Beam " + (jj + 1)
+															+ " has a length less than minlength and must be ignored by consumers; length value: "
 															+ length.toString() + " in file: " + file;
 
-													fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Beam " + (jj + 1)
-															+ " has a length less that the minlength with a length value of "
-															+ length.toString() + " in file: " + file;
-													fxmlErrorReturn += "</Issue>";
-													errChk("ER_091");
-													ierCnt++;
-													if (ierCnt > iErrMaxStr) {
-														fErrorReturn += "<br>More than " + iErrMaxStr
-																+ " errors found, stopping..<br>";
+													fxmlWarningReturn += "<Issue  issueID=\"WR_025\" severity=\"info\" class=\"structure\" type=\"beam length warning\">";
+													fxmlWarningReturn += StringEscapeUtils.escapeXml10("Beam " + (jj + 1)
+															+ " has a length less than minlength and must be ignored by consumers; length value: "
+															+ length.toString() + " in file: " + file);
+													fxmlWarningReturn += "</Issue>";
+													errChk("WR_025");
+													iwrCnt++;
+													if (iwrCnt > iWrnMaxStr) {
+														fWarningReturn += "<br>More than " + iWrnMaxStr
+																+ " warnings found, stopping..<br>";
 														return;
 													}
 												}
@@ -5160,8 +5100,8 @@ public class FileStructureCheck {
 															+ " has a vertexes set to the same value in file: " + file;
 
 													fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "Beam " + (jj + 1)
-															+ " has a vertexes set to the same value in file: " + file;
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam " + (jj + 1)
+															+ " has a vertexes set to the same value in file: " + file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_091");
 													ierCnt++;
@@ -5178,8 +5118,8 @@ public class FileStructureCheck {
 													fWarningReturn += "<br>WR_015: Beam: with pid=" + tst + " in file: "
 															+ file + " has not defined p1.";
 													fxmlWarningReturn += "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">";
-													fxmlWarningReturn += "Beam: with pid=" + tst + " in file: " + file
-															+ " has not defined p1.";
+													fxmlWarningReturn += StringEscapeUtils.escapeXml10("Beam: with pid=" + tst + " in file: " + file
+															+ " has not defined p1.");
 													fxmlWarningReturn += "</Issue>";
 													errChk("WR_015");
 													iwrCnt++;
@@ -5197,9 +5137,9 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has pid defined but does not have the pid defined in both the beamlattice and the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "beamlattice with  pid=" + pidBeamLatChk
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("beamlattice with  pid=" + pidBeamLatChk
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p and pid defined but does not have the pid defined in both the beamlattice and the object";
+															+ " has p and pid defined but does not have the pid defined in both the beamlattice and the object");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_089");
 													ierCnt++;
@@ -5220,12 +5160,12 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has p1 and pid defined but does not have the pid or pindex defined in the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_104\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-													fxmlErrorReturn += "Beam with p1="
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with p1="
 															+ vnode.getAttributes().getNamedItem("p1").getTextContent()
 															+ " and pid="
 															+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p1 and pid defined but does not have the pid or pindex defined in the object.";
+															+ " has p1 and pid defined but does not have the pid or pindex defined in the object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_104");
 													ierCnt++;
@@ -5245,12 +5185,12 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has p1 and pid defined but does not have the pid defined in the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_105\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-													fxmlErrorReturn += "Beam with p1="
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with p1="
 															+ vnode.getAttributes().getNamedItem("p1").getTextContent()
 															+ " and pid="
 															+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p1 and pid defined but does not have the pid defined in the object.";
+															+ " has p1 and pid defined but does not have the pid defined in the object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_105");
 													ierCnt++;
@@ -5269,12 +5209,12 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has p1 and pid defined but does not have the pindex defined in the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_106\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-													fxmlErrorReturn += "Beam with p1="
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with p1="
 															+ vnode.getAttributes().getNamedItem("p1").getTextContent()
 															+ " and pid="
 															+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p1 and pid defined but does not have the pindex defined in the object.";
+															+ " has p1 and pid defined but does not have the pindex defined in the object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_106");
 													ierCnt++;
@@ -5295,9 +5235,9 @@ public class FileStructureCheck {
 															+ vnode.getAttributes().getNamedItem("cap1") + " in file: "
 															+ file + " does not match butt, sphere, or hemisphere.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_095\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-													fxmlErrorReturn += "Beam with "
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with "
 															+ vnode.getAttributes().getNamedItem("cap1") + " in file: "
-															+ file + " does not match butt, sphere, or hemisphere.";
+															+ file + " does not match butt, sphere, or hemisphere.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_095");
 													ierCnt++;
@@ -5318,9 +5258,9 @@ public class FileStructureCheck {
 															+ vnode.getAttributes().getNamedItem("cap2") + " in file: "
 															+ file + " does not match butt, sphere, or hemisphere.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_095\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-													fxmlErrorReturn += "Beam with "
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with "
 															+ vnode.getAttributes().getNamedItem("cap2") + " in file: "
-															+ file + " does not match butt, sphere, or hemisphere.";
+															+ file + " does not match butt, sphere, or hemisphere.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_095");
 													ierCnt++;
@@ -5337,8 +5277,8 @@ public class FileStructureCheck {
 													fErrorReturn += "<br>ER_095: Beam: " + sadd + " in file: " + file
 															+ " defines r2 while r1 has not been set.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_095\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-													fxmlErrorReturn += "Bem: " + sadd + " in file: " + file
-															+ " defines r2 while r1 has not been set.";
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("Bem: " + sadd + " in file: " + file
+															+ " defines r2 while r1 has not been set.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_095");
 													ierCnt++;
@@ -5356,8 +5296,8 @@ public class FileStructureCheck {
 														fErrorReturn += "<br>ER_097: Beam with pid=" + tst
 																+ " in file: " + file + " does not exist yet.";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_097\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-														fxmlErrorReturn += "Beam with pid=" + tst + " in file: " + file
-																+ " does not exist yet.";
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with pid=" + tst + " in file: " + file
+																+ " does not exist yet.");
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_097");
 														ierCnt++;
@@ -5377,10 +5317,10 @@ public class FileStructureCheck {
 																		+ " exceeds the number of items in "
 																		+ idWithName.get(tst) + ".";
 																fxmlErrorReturn += "<Issue  issueID=\"ER_098\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-																fxmlErrorReturn += "Beam with pid=" + tst + " p1="
+																fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with pid=" + tst + " p1="
 																		+ tst2 + " in file: " + file
 																		+ " exceeds the number of items in "
-																		+ idWithName.get(tst) + ".";
+																		+ idWithName.get(tst) + ".");
 																fxmlErrorReturn += "</Issue>";
 																errChk("ER_098");
 																ierCnt++;
@@ -5400,10 +5340,10 @@ public class FileStructureCheck {
 																		+ " exceeds the number of items in "
 																		+ idWithName.get(tst) + ".";
 																fxmlErrorReturn += "<Issue  issueID=\"ER_099\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-																fxmlErrorReturn += "Beam with pid=" + tst + " p2="
+																fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beam with pid=" + tst + " p2="
 																		+ tst2 + " in file: " + file
 																		+ " exceeds the number of items in "
-																		+ idWithName.get(tst) + ".";
+																		+ idWithName.get(tst) + ".");
 																fxmlErrorReturn += "</Issue>";
 																errChk("ER_099");
 																ierCnt++;
@@ -5439,9 +5379,9 @@ public class FileStructureCheck {
 																	+ ballcnt + " in file: " + file;
 
 															fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-															fxmlErrorReturn += "Beamset ballref with index=" + tst
+															fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamset ballref with index=" + tst
 																	+ " is greater than the number of availalbe (zero based) balls: "
-																	+ ballcnt + " in file: " + file;
+																	+ ballcnt + " in file: " + file);
 															fxmlErrorReturn += "</Issue>";
 															errChk("ER_091");
 															ierCnt++;
@@ -5460,9 +5400,9 @@ public class FileStructureCheck {
 																	+ ibeam + " in file: " + file;
 
 															fxmlErrorReturn += "<Issue  issueID=\"ER_091\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-															fxmlErrorReturn += "Beamset ref with index=" + tst
+															fxmlErrorReturn += StringEscapeUtils.escapeXml10("Beamset ref with index=" + tst
 																	+ " is greater than the number of availalbe (zero based) beams: "
-																	+ ibeam + " in file: " + file;
+																	+ ibeam + " in file: " + file);
 															fxmlErrorReturn += "</Issue>";
 															errChk("ER_091");
 															ierCnt++;
@@ -5494,9 +5434,9 @@ public class FileStructureCheck {
 																+ " is greater than the number of availalbe (zero based) vertices: "
 																+ ivert + " in file: " + file;
 														fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-														fxmlErrorReturn += "ball with vindex=" + tst
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("ball with vindex=" + tst
 																+ " is greater than the number of availalbe (zero based) vertices: "
-																+ ivert + " in file: " + file;
+																+ ivert + " in file: " + file);
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_090");
 														ierCnt++;
@@ -5514,9 +5454,9 @@ public class FileStructureCheck {
 																+ " points to a vertex mapped to a vertex other than a beam endpoint in file: "
 																+ file;
 														fxmlErrorReturn += "<Issue  issueID=\"ER_090\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-														fxmlErrorReturn += "ball with vindex=" + tst
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("ball with vindex=" + tst
 																+ " points to a vertex mapped to a vertex other than a beam endpoint in file: "
-																+ file;
+																+ file);
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_090");
 														ierCnt++;
@@ -5536,8 +5476,8 @@ public class FileStructureCheck {
 													fWarningReturn += "<br>WR_015: Ball: with pid=" + tst + " in file: "
 															+ file + " has not defined p.";
 													fxmlWarningReturn += "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"ID warning\">";
-													fxmlWarningReturn += "Ball: with pid=" + tst + " in file: " + file
-															+ " has not defined p.";
+													fxmlWarningReturn += StringEscapeUtils.escapeXml10("Ball: with pid=" + tst + " in file: " + file
+															+ " has not defined p.");
 													fxmlWarningReturn += "</Issue>";
 													errChk("WR_015");
 													iwrCnt++;
@@ -5557,12 +5497,12 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has p and pid defined but does not have the pid or pindex defined in the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "ball with p="
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("ball with p="
 															+ vnode.getAttributes().getNamedItem("p").getTextContent()
 															+ " and pid="
 															+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p and pid defined but does not have the pid or pindex defined in the object.";
+															+ " has p and pid defined but does not have the pid or pindex defined in the object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_089");
 													ierCnt++;
@@ -5585,12 +5525,12 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has p and pid defined but does not have the pid defined in both the beamlattice and the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-													fxmlErrorReturn += "ball with p="
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("ball with p="
 															+ vnode.getAttributes().getNamedItem("p").getTextContent()
 															+ " and pid="
 															+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p and pid defined but does not have the pid defined in both the beamlattice and the object.";
+															+ " has p and pid defined but does not have the pid defined in both the beamlattice and the object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_089");
 													ierCnt++;
@@ -5609,12 +5549,12 @@ public class FileStructureCheck {
 															+ "  in file: " + file + " with object id: " + objId
 															+ " has p and pid defined but does not have the pindex defined in the object.";
 													fxmlErrorReturn += "<Issue  issueID=\"ER_106\" severity=\"moderate\" class=\"structure\" type=\"no default material\">";
-													fxmlErrorReturn += "ball with p="
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("ball with p="
 															+ vnode.getAttributes().getNamedItem("p").getTextContent()
 															+ " and pid="
 															+ vnode.getAttributes().getNamedItem("pid").getTextContent()
 															+ "  in file: " + file + " with object id: " + objId
-															+ " has p and pid defined but does not have the pindex defined in the object.";
+															+ " has p and pid defined but does not have the pindex defined in the object.");
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_106");
 													ierCnt++;
@@ -5634,8 +5574,8 @@ public class FileStructureCheck {
 														fErrorReturn += "<br>ER_088: ball with pid: " + pid
 																+ ", in file: " + file + " does not yet exist.";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_088\" severity=\"moderate\" class=\"structure\" type=\"forward reference\">";
-														fxmlErrorReturn += "ball with pid: " + pid + ", in file: "
-																+ file + " does not yet exist.";
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("ball with pid: " + pid + ", in file: "
+																+ file + " does not yet exist.");
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_088");
 														ierCnt++;
@@ -5660,10 +5600,10 @@ public class FileStructureCheck {
 																		+ tst2 + " which exceeds the index count of "
 																		+ ichk + " for " + name + ".";
 																fxmlErrorReturn += "<Issue  issueID=\"ER_089\" severity=\"high\" class=\"structure\" type=\"index out of range\">";
-																fxmlErrorReturn += "object with pid: " + pid
+																fxmlErrorReturn += StringEscapeUtils.escapeXml10("object with pid: " + pid
 																		+ ", in file: " + file + " has a p value of "
 																		+ tst2 + " which exceeds the index count of "
-																		+ ichk + " for " + name + ".";
+																		+ ichk + " for " + name + ".");
 																fxmlErrorReturn += "</Issue>";
 																errChk("ER_089");
 																ierCnt++;
@@ -5685,7 +5625,7 @@ public class FileStructureCheck {
 						} catch (Exception et) {
 							fErrorReturn += "<br>ER_077: Caught an exception: " + et.getMessage() + "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-							fxmlErrorReturn += "Caught an exception: " + et.getMessage();
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + et.getMessage());
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_077");
 							et.printStackTrace();
@@ -5703,22 +5643,33 @@ public class FileStructureCheck {
 							String altUUID = cnode.getAttributes().getNamedItem("UUID").getTextContent();
 							idUuid.add(altUUID);
 							fileUuid.add(file);
-							// Searches for matching object ID in any file
+							// Object IDs are local to the model selected by path (or this model).
 							String objectid = cnode.getAttributes().getNamedItem("objectid").getTextContent().trim();
+							String fileName = file;
+							if (cnode.getAttributes().getNamedItem("path") != null) {
+								fileName = cnode.getAttributes().getNamedItem("path").getTextContent();
+							}
 							String id = "";
 							if (node.getParentNode().getAttributes().getNamedItem("id").getTextContent() != null) {
 								id = node.getParentNode().getAttributes().getNamedItem("id").getTextContent();
 							}
 							try (ZipFile zfile = new ZipFile(fCurrentFile)) {
+								if (skipUnsupportedAlternative(zfile, fileName)) continue;
 								boolean fndObj = false;
-								boolean alternativeFirst = false;
+								boolean inaccessible = false;
 								Enumeration<? extends ZipEntry> entries = zfile.entries();
 								while (entries.hasMoreElements()) {
 									ZipEntry entry = entries.nextElement();
+									if (!fileName.equals("/" + entry.getName())) {
+										continue;
+									}
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
-									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-										DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+									zin.close();
+									sContent = decryptReference(sContent, fileName);
+									if (sContent == null) { inaccessible = true; break; }
+									if (!sContent.isEmpty()) {
+										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
 										DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -5732,21 +5683,14 @@ public class FileStructureCheck {
 												fndObj = true;
 												objIdListRef.add("/" + entry.getName() + "|" + objectid);
 												NodeList objectChildren = nObjy.item(ico).getChildNodes();
-												String fileName;
-												if (cnode.getAttributes().getNamedItem("path") != null) {
-													fileName = cnode.getAttributes().getNamedItem("path")
-															.getTextContent();
-												} else {
-													fileName = file;
-												}
 												for (int k = 0; k < objectChildren.getLength(); k++) {
 													if (objectChildren.item(k).getNodeName().contains("alternative")) {
 														fErrorReturn += "<br>ER_140: Object " + objectid + " in "
 																+ fileName
 																+ " specified as an alternative also contains alternatives";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_140\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-														fxmlErrorReturn += "Object " + objectid + " in " + fileName
-																+ " specified as an alternative also contains alternatives";
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("Object " + objectid + " in " + fileName
+																+ " specified as an alternative also contains alternatives");
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_140");
 														ierCnt++;
@@ -5760,12 +5704,12 @@ public class FileStructureCheck {
 											}
 											if (id.contentEquals(nObjy.item(ico).getAttributes().getNamedItem("id")
 													.getTextContent().trim()) && !fndObj
-													&& file.contains(entry.getName())) {
+													&& file.equals(fileName)) {
 												fErrorReturn += "<br>ER_141: Alternative with objectid = " + objectid
 														+ " is positioned before the referenced object";
 												fxmlErrorReturn += "<Issue  issueID=\"ER_141\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-												fxmlErrorReturn += "Alternative with objectid = " + objectid
-														+ " is positioned before the referenced object";
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("Alternative with objectid = " + objectid
+														+ " is positioned before the referenced object");
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_141");
 												ierCnt++;
@@ -5778,12 +5722,12 @@ public class FileStructureCheck {
 										}
 									}
 								}
-								if (!fndObj) {
+								if (!fndObj && !inaccessible) {
 									fErrorReturn += "<br>ER_057: Did not find an object id for item with objectid="
 											+ objectid + " in " + file + "<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_057\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-									fxmlErrorReturn += "Did not find an object id for item with objectid=" + objectid
-											+ " in " + file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for item with objectid=" + objectid
+											+ " in " + file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_057");
 									ierCnt++;
@@ -5796,7 +5740,7 @@ public class FileStructureCheck {
 							} catch (Exception e) {
 								fErrorReturn += "<br>ER_077: Caught an exception: " + e.getMessage() + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-								fxmlErrorReturn += "Caught an exception: " + e.getMessage();
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + e.getMessage());
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_077");
 								e.printStackTrace();
@@ -5839,7 +5783,7 @@ public class FileStructureCheck {
 					if (parentNode.getAttributes().getNamedItem("pid") != null) {
 						fErrorReturn += "<br>ER_134: pid specified in booleanshape parent object " + parentID;
 						fxmlErrorReturn += "<Issue  issueID=\"ER_134\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "pid specified in booleanshape parent object " + parentID;
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("pid specified in booleanshape parent object " + parentID);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_134");
 						ierCnt++;
@@ -5852,7 +5796,7 @@ public class FileStructureCheck {
 					if (parentNode.getAttributes().getNamedItem("pindex") != null) {
 						fErrorReturn += "<br>ER_135: pindex specified in booleanshape parent object " + parentID;
 						fxmlErrorReturn += "<Issue  issueID=\"ER_135\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-						fxmlErrorReturn += "pindex specified in booleanshape parent object " + parentID;
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("pindex specified in booleanshape parent object " + parentID);
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_135");
 						ierCnt++;
@@ -5867,7 +5811,7 @@ public class FileStructureCheck {
 							if (node.getAttributes().item(j).getNodeName().contains(":")) {
 								fErrorReturn += "<br>ER_133: booleanshape path with a prefix in object " + parentID;
 								fxmlErrorReturn += "<Issue  issueID=\"ER_133\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-								fxmlErrorReturn += "booleanshape path with a prefix in object " + parentID;
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("booleanshape path with a prefix in object " + parentID);
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_133");
 								ierCnt++;
@@ -5886,8 +5830,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_136: Found component and boolean in same object: "
 									+ parentNode.getAttributes().getNamedItem("id").getTextContent();
 							fxmlErrorReturn += "<Issue  issueID=\"ER_136\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += "Found component and boolean in same object: "
-									+ parentNode.getAttributes().getNamedItem("id").getTextContent();
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Found component and boolean in same object: "
+									+ parentNode.getAttributes().getNamedItem("id").getTextContent());
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_136");
 							ierCnt++;
@@ -5906,8 +5850,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_136: Could not find file " + booleanshapePathFile
 									+ " as specified in 3D/3dmodel.model";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_136\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-							fxmlErrorReturn += "Could not find file " + booleanshapePathFile
-									+ " as specified in 3D/3dmodel.model";
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + booleanshapePathFile
+									+ " as specified in 3D/3dmodel.model");
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_136");
 							ierCnt++;
@@ -5931,7 +5875,7 @@ public class FileStructureCheck {
 							InputStream zin = zfile.getInputStream(entry);
 							sContent = IOUtils.toString(zin, "UTF-8");
 							if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-								DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+								DocumentBuilderFactory dbFactory = SafeXml.factory();
 								dbFactory.setNamespaceAware(true);// needed to use
 																	// getElementsByTagNameNS
 								DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -5954,9 +5898,9 @@ public class FileStructureCheck {
 													+ " contains a forward reference objectid " + objectid + " in "
 													+ file;
 											fxmlErrorReturn += "<Issue  issueID=\"ER_143\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-											fxmlErrorReturn += "booleanshape in object " + parentObjId
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("booleanshape in object " + parentObjId
 													+ " contains a forward reference objectid " + objectid + " in "
-													+ file;
+													+ file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_143");
 											ierCnt++;
@@ -5974,8 +5918,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_137: boolean reference object " + objectid
 													+ " is not a model";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_137\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-											fxmlErrorReturn += "boolean reference object " + objectid
-													+ " is not a model" + " in " + file;
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("boolean reference object " + objectid
+													+ " is not a model" + " in " + file);
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_137");
 											ierCnt++;
@@ -5994,8 +5938,8 @@ public class FileStructureCheck {
 												fErrorReturn += "<br>ER_138: booleanshape reference object " + objectid
 														+ " contains components";
 												fxmlErrorReturn += "<Issue  issueID=\"ER_138\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-												fxmlErrorReturn += "booleanshape reference object " + objectid
-														+ " contains components" + " in " + file;
+												fxmlErrorReturn += StringEscapeUtils.escapeXml10("booleanshape reference object " + objectid
+														+ " contains components" + " in " + file);
 												fxmlErrorReturn += "</Issue>";
 												errChk("ER_138");
 												ierCnt++;
@@ -6014,8 +5958,8 @@ public class FileStructureCheck {
 							fErrorReturn += "<br>ER_057: Did not find an object id for item with objectid=" + objectid
 									+ " in " + file + "<br>";
 							fxmlErrorReturn += "<Issue  issueID=\"ER_057\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-							fxmlErrorReturn += "Did not find an object id for item with objectid=" + objectid + " in "
-									+ file;
+							fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for item with objectid=" + objectid + " in "
+									+ file);
 							fxmlErrorReturn += "</Issue>";
 							errChk("ER_057");
 							ierCnt++;
@@ -6027,7 +5971,7 @@ public class FileStructureCheck {
 					} catch (Exception e) {
 						fErrorReturn += "<br>ER_077: Caught an exception: " + e.getMessage() + "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-						fxmlErrorReturn += "Caught an exception: " + e.getMessage();
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + e.getMessage());
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_077");
 						e.printStackTrace();
@@ -6047,8 +5991,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_136: Could not find file " + booleanPathFile
 											+ " as specified in 3D/3dmodel.model";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_136\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-									fxmlErrorReturn += "Could not find file " + booleanPathFile
-											+ " as specified in 3D/3dmodel.model";
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Could not find file " + booleanPathFile
+											+ " as specified in 3D/3dmodel.model");
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_136");
 									ierCnt++;
@@ -6066,7 +6010,7 @@ public class FileStructureCheck {
 									if (cnode.getAttributes().item(k).getNodeName().contains(":")) {
 										fErrorReturn += "<br>ER_133: boolean path with a prefix in object " + parentID;
 										fxmlErrorReturn += "<Issue  issueID=\"ER_133\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-										fxmlErrorReturn += "boolean path with a prefix in object " + parentID;
+										fxmlErrorReturn += StringEscapeUtils.escapeXml10("boolean path with a prefix in object " + parentID);
 										fxmlErrorReturn += "</Issue>";
 										errChk("ER_133");
 										ierCnt++;
@@ -6091,7 +6035,7 @@ public class FileStructureCheck {
 									InputStream zin = zfile.getInputStream(entry);
 									sContent = IOUtils.toString(zin, "UTF-8");
 									if (sContent.trim().toLowerCase().startsWith("<?xml")) {
-										DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+										DocumentBuilderFactory dbFactory = SafeXml.factory();
 										dbFactory.setNamespaceAware(true);// needed to use
 																			// getElementsByTagNameNS
 										DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
@@ -6114,9 +6058,9 @@ public class FileStructureCheck {
 															+ " contains a forward refrence objectid " + objectid
 															+ " in " + file;
 													fxmlErrorReturn += "<Issue  issueID=\"ER_143\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-													fxmlErrorReturn += "boolean in object " + booleanID
+													fxmlErrorReturn += StringEscapeUtils.escapeXml10("boolean in object " + booleanID
 															+ " contains a forward refrence objectid " + objectid
-															+ " in " + file;
+															+ " in " + file);
 													fxmlErrorReturn += "</Issue>";
 													errChk("ER_143");
 													ierCnt++;
@@ -6137,8 +6081,8 @@ public class FileStructureCheck {
 														fErrorReturn += "<br>ER_138: boolean reference object "
 																+ objectid + " contains components";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_138\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-														fxmlErrorReturn += "boolean reference object " + objectid
-																+ " contains components" + " in " + file;
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("boolean reference object " + objectid
+																+ " contains components" + " in " + file);
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_138");
 														ierCnt++;
@@ -6153,8 +6097,8 @@ public class FileStructureCheck {
 														fErrorReturn += "<br>ER_139: boolean reference object "
 																+ objectid + " contains booleans";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_139\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-														fxmlErrorReturn += "boolean reference object " + objectid
-																+ " contains booleans" + " in " + file;
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("boolean reference object " + objectid
+																+ " contains booleans" + " in " + file);
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_139");
 														ierCnt++;
@@ -6169,8 +6113,8 @@ public class FileStructureCheck {
 														fErrorReturn += "<br>ER_176: boolean reference object "
 																+ objectid + " contains displacements";
 														fxmlErrorReturn += "<Issue  issueID=\"ER_176\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-														fxmlErrorReturn += "boolean reference object " + objectid
-																+ " contains displacements" + " in " + file;
+														fxmlErrorReturn += StringEscapeUtils.escapeXml10("boolean reference object " + objectid
+																+ " contains displacements" + " in " + file);
 														fxmlErrorReturn += "</Issue>";
 														errChk("ER_176");
 														ierCnt++;
@@ -6189,8 +6133,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_057: Did not find an object id for item with objectid="
 											+ objectid + " in " + file + "<br>";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_057\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-									fxmlErrorReturn += "Did not find an object id for item with objectid=" + objectid
-											+ " in " + file;
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("Did not find an object id for item with objectid=" + objectid
+											+ " in " + file);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_057");
 									ierCnt++;
@@ -6202,7 +6146,7 @@ public class FileStructureCheck {
 							} catch (Exception e) {
 								fErrorReturn += "<br>ER_077: Caught an exception: " + e.getMessage() + "<br>";
 								fxmlErrorReturn += "<Issue  issueID=\"ER_077\" severity=\"moderate\" class=\"structure\" type=\"unexpected exception\">";
-								fxmlErrorReturn += "Caught an exception: " + e.getMessage();
+								fxmlErrorReturn += StringEscapeUtils.escapeXml10("Caught an exception: " + e.getMessage());
 								fxmlErrorReturn += "</Issue>";
 								errChk("ER_077");
 								e.printStackTrace();
@@ -6233,7 +6177,7 @@ public class FileStructureCheck {
 							if (module < .999999 || module > 1.000001) {
 								fWarningReturn += "<br>WR_023: X, Y, Z normvector whose module is above or below one (module = " + module + ")";
 								fxmlWarningReturn += "<Issue  issueID=\"WR_023\" severity=\"high\" class=\"structure\" type=\"invalid relationship\">";
-								fxmlWarningReturn += "X, Y, Z normvector whose module is above or below one (module = " + module + ")";
+								fxmlWarningReturn += StringEscapeUtils.escapeXml10("X, Y, Z normvector whose module is above or below one (module = " + module + ")");
 								fxmlWarningReturn += "</Issue>";
 								errChk("WR_023");
 								iwrCnt++;
@@ -6302,8 +6246,8 @@ public class FileStructureCheck {
 								+ objectNode.getAttributes().getNamedItem("id").getTextContent()
 								+ " containing displacmentmesh has a type other than model";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_145\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "object " + objectNode.getAttributes().getNamedItem("id").getTextContent()
-								+ " containing displacmentmesh has a type other than model";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("object " + objectNode.getAttributes().getNamedItem("id").getTextContent()
+								+ " containing displacmentmesh has a type other than model");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_145");
 						ierCnt++;
@@ -6390,8 +6334,8 @@ public class FileStructureCheck {
 									fErrorReturn += "<br>ER_149: triangles with did " + trianglesDid
 											+ " points to a non-existent disp2dgroup resource";
 									fxmlErrorReturn += "<Issue  issueID=\"ER_149\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-									fxmlErrorReturn += "triangles with did " + trianglesDid
-											+ " points to a non-existent disp2dgroup resource";
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("triangles with did " + trianglesDid
+											+ " points to a non-existent disp2dgroup resource");
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_149");
 									ierCnt++;
@@ -6439,8 +6383,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_151: triangle with did " + triangleDid
 													+ " points to a non-existent disp2dgroup resource";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_151\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-											fxmlErrorReturn += "triangle with did " + triangleDid
-													+ " points to a non-existent disp2dgroup resource";
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("triangle with did " + triangleDid
+													+ " points to a non-existent disp2dgroup resource");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_151");
 											ierCnt++;
@@ -6554,8 +6498,8 @@ public class FileStructureCheck {
 											fErrorReturn += "<br>ER_157: triange with pid attribute " + pid
 													+ " points to a non-existent resource";
 											fxmlErrorReturn += "<Issue  issueID=\"ER_157\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-											fxmlErrorReturn += "triange with pid attribute " + pid
-													+ " points to a non-existent resource";
+											fxmlErrorReturn += StringEscapeUtils.escapeXml10("triange with pid attribute " + pid
+													+ " points to a non-existent resource");
 											fxmlErrorReturn += "</Issue>";
 											errChk("ER_157");
 											ierCnt++;
@@ -6921,9 +6865,9 @@ public class FileStructureCheck {
 								+ " has an invalid dispid attribute pointing to a non-existent resource in " + file
 								+ "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_170\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "disp2dgroup " + node.getAttributes().getNamedItem("dispid").getTextContent()
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("disp2dgroup " + node.getAttributes().getNamedItem("dispid").getTextContent()
 								+ " has an invalid dispid attribute pointing to a non-existent resource in " + file
-								+ "<br>";
+								+ "<br>");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_170");
 						ierCnt++;
@@ -6935,8 +6879,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_171: Reference in disp2dgroup with dispid " + dispId
 								+ " attribute before it is defined";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_171\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Reference in disp2dgroup with dispid " + dispId
-								+ " attribute before it is defined";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Reference in disp2dgroup with dispid " + dispId
+								+ " attribute before it is defined");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_171");
 						ierCnt++;
@@ -6952,9 +6896,9 @@ public class FileStructureCheck {
 								+ " has an invalid nid attribute pointing to a non-existent resource in " + file
 								+ "<br>";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_172\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "disp2dgroup " + node.getAttributes().getNamedItem("dispid").getTextContent()
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("disp2dgroup " + node.getAttributes().getNamedItem("dispid").getTextContent()
 								+ " has an invalid nid attribute pointing to a non-existent resource in " + file
-								+ "<br>";
+								+ "<br>");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_172");
 						ierCnt++;
@@ -6966,8 +6910,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_173: Reference in disp2dgroup with nid " + nId
 								+ " attribute before it is defined";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_173\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-						fxmlErrorReturn += "Reference in disp2dgroup with nid " + nId
-								+ " attribute before it is defined";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("Reference in disp2dgroup with nid " + nId
+								+ " attribute before it is defined");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_173");
 						ierCnt++;
@@ -6998,10 +6942,10 @@ public class FileStructureCheck {
 											+ " has an n attribute " + nValue
 											+ " outside the valid range for normvectors in normvectorgroup " + nId;
 									fxmlErrorReturn += "<Issue  issueID=\"ER_174\" severity=\"high\" class=\"structure\" type=\"ID error\">";
-									fxmlErrorReturn += "A disp2dcoord in disp2dgroup "
+									fxmlErrorReturn += StringEscapeUtils.escapeXml10("A disp2dcoord in disp2dgroup "
 											+ node.getAttributes().getNamedItem("dispid").getTextContent()
 											+ " has an n attribute " + nValue
-											+ " outside the valid range for normvectors in normvectorgroup " + nId;
+											+ " outside the valid range for normvectors in normvectorgroup " + nId);
 									fxmlErrorReturn += "</Issue>";
 									errChk("ER_174");
 									ierCnt++;
@@ -7016,8 +6960,18 @@ public class FileStructureCheck {
 				}
 			}
 
-			// check resources that basematerials is first and object last.
+			// Keep material ordering; required volumetric/implicit extensions allow
+			// their resources to follow objects.
 			if (node.getNodeName().equals("resources")) {
+				Element model = node.getOwnerDocument().getDocumentElement();
+				boolean relaxedResourceOrdering = false;
+				for (String prefix : model.getAttribute("requiredextensions").trim().split("\\s+")) {
+					String namespace = model.lookupNamespaceURI(prefix);
+					if (VOLUMETRIC_NS.equals(namespace) || IMPLICIT_NS.equals(namespace)) {
+						relaxedResourceOrdering = true;
+						break;
+					}
+				}
 				NodeList childList = node.getChildNodes();
 				Boolean startBase = false;
 				Boolean endBase = false;
@@ -7039,8 +6993,8 @@ public class FileStructureCheck {
 						fErrorReturn += "<br>ER_102: basematerials appeared again after other resources were defined "
 								+ " in file: " + file + ". The basematerials should appear first in resources.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_102\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
-						fxmlErrorReturn += "basematerials appeared again after other resources were defined "
-								+ " in file: " + file + ". The basematerials should appear first in resources.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("basematerials appeared again after other resources were defined "
+								+ " in file: " + file + ". The basematerials should appear first in resources.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_102");
 						ierCnt++;
@@ -7055,14 +7009,15 @@ public class FileStructureCheck {
 						endBase = true;
 					}
 
-					// if we have set endObject, but find something else, that
-					// is bad
-					if (!name.equals("object") && endObject && !doOnceObj) {
+					boolean extensionResource = VOLUMETRIC_NS.equals(cnode.getNamespaceURI())
+							|| IMPLICIT_NS.equals(cnode.getNamespaceURI());
+					if (!name.equals("object") && endObject && !doOnceObj
+							&& !(relaxedResourceOrdering && extensionResource)) {
 						fErrorReturn += "<br>ER_103: Other resources appeared after object was defined " + " in file: "
 								+ file + ". The object elements should appear last in resources.";
 						fxmlErrorReturn += "<Issue  issueID=\"ER_103\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
-						fxmlErrorReturn += "ther resources appeared after object was defined " + " in file: " + file
-								+ ". The object elements should appear last in resources.";
+						fxmlErrorReturn += StringEscapeUtils.escapeXml10("ther resources appeared after object was defined " + " in file: " + file
+								+ ". The object elements should appear last in resources.");
 						fxmlErrorReturn += "</Issue>";
 						errChk("ER_103");
 						doOnceObj = true;
@@ -7082,6 +7037,12 @@ public class FileStructureCheck {
 			}
 
 		}
+		checkDisplacementAndUnusedResources(verticesTable, triangleTable, disp2dGroupTable, normVectorGroupTable, file);
+	}
+
+	// Keep the final validation phase separate so Java 8 bytecode stays below the per-method limit.
+	private void checkDisplacementAndUnusedResources(DefaultTableModel verticesTable, DefaultTableModel triangleTable,
+			DefaultTableModel disp2dGroupTable, DefaultTableModel normVectorGroupTable, String file) {
 		// Normalize vertices
 //		Double maxX = 0.0;
 //		Double maxY = 0.0;
@@ -7243,23 +7204,6 @@ public class FileStructureCheck {
 			found1 = false;
 			found2 = false;
 
-			System.out.println("norm vector 0: " + normalizedVector[0]);
-			System.out.println("norm vector 1: " + normalizedVector[1]);
-			System.out.println("norm vector 2: " + normalizedVector[2]);
-			System.out.println("");
-			System.out.println("norm v1 0: " + normV1[0]);
-			System.out.println("norm v1 1: " + normV1[1]);
-			System.out.println("norm v1 2: " + normV1[2]);
-			System.out.println("");
-			System.out.println("norm v2 0: " + normV2[0]);
-			System.out.println("norm v2 1: " + normV2[1]);
-			System.out.println("norm v2 2: " + normV2[2]);
-			System.out.println("");
-			System.out.println("norm v3 0: " + normV3[0]);
-			System.out.println("norm v3 1: " + normV3[1]);
-			System.out.println("norm v3 2: " + normV3[2]);
-			System.out.println("");
-			
 			//Calculate scalar products if no values are missing
 			if(!missingValues) {
 				scalarProducts[0] = ((normalizedVector[0] * normV1[0]) + (normalizedVector[1] * normV1[1])
@@ -7276,11 +7220,11 @@ public class FileStructureCheck {
 							+ objectId + " triangle index " + triangleTable.getValueAt(i, 2)
 							+ " , displacement normvector from d1";
 					fxmlErrorReturn += "<Issue  issueID=\"ER_175\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
-					fxmlErrorReturn += "Scalar product (" + scalarProducts[0] + ") of normal vector (" + normalizedVector[0] + ", "
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Scalar product (" + scalarProducts[0] + ") of normal vector (" + normalizedVector[0] + ", "
 							+ normalizedVector[1] + ", " + normalizedVector[2] + ") and normvector (" + normV1[0]
 							+ ", " + normV1[1] + ", " + normV1[2] + ") is 0 or less.<br>" + "Normal vector from Object "
 							+ objectId + " triangle index " + triangleTable.getValueAt(i, 2)
-							+ " , displacement normvector from d1";
+							+ " , displacement normvector from d1");
 					fxmlErrorReturn += "</Issue>";
 					errChk("ER_175");
 					ierCnt++;
@@ -7296,12 +7240,11 @@ public class FileStructureCheck {
 							+ objectId + " triangle index " + triangleTable.getValueAt(i, 2)
 							+ " , displacement normvector from d2";
 					fxmlErrorReturn += "<Issue  issueID=\"ER_175\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
-					fxmlErrorReturn += "<Issue  issueID=\"ER_175\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
-					fxmlErrorReturn += "Scalar product (" + scalarProducts[1] + ") of normal vector (" + normalizedVector[0] + ", "
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Scalar product (" + scalarProducts[1] + ") of normal vector (" + normalizedVector[0] + ", "
 							+ normalizedVector[1] + ", " + normalizedVector[2] + ") and normvector (" + normV2[0]
 							+ ", " + normV2[1] + ", " + normV2[2] + ") is 0 or less.<br>" + "Normal vector from Object "
 							+ objectId + " triangle index " + triangleTable.getValueAt(i, 2)
-							+ " , displacement normvector from d2";
+							+ " , displacement normvector from d2");
 					fxmlErrorReturn += "</Issue>";
 					errChk("ER_175");
 					ierCnt++;
@@ -7317,11 +7260,11 @@ public class FileStructureCheck {
 							+ objectId + " triangle index " + triangleTable.getValueAt(i, 2)
 							+ " , displacement normvector from d3";
 					fxmlErrorReturn += "<Issue  issueID=\"ER_175\" severity=\"high\" class=\"structure\" type=\"resource ordering\">";
-					fxmlErrorReturn += "Scalar product (" + scalarProducts[2] + ") of normal vector (" + normalizedVector[0] + ", "
+					fxmlErrorReturn += StringEscapeUtils.escapeXml10("Scalar product (" + scalarProducts[2] + ") of normal vector (" + normalizedVector[0] + ", "
 							+ normalizedVector[1] + ", " + normalizedVector[2] + ") and normvector (" + normV3[0]
 							+ ", " + normV3[1] + ", " + normV3[2] + ")" + " is 0 or less.<br>" + "Normal vector from Object "
 							+ objectId + " triangle index " + triangleTable.getValueAt(i, 2)
-							+ " , displacement normvector from d3";
+							+ " , displacement normvector from d3");
 					fxmlErrorReturn += "</Issue>";
 					errChk("ER_175");
 					ierCnt++;
@@ -7345,8 +7288,8 @@ public class FileStructureCheck {
 				fWarningReturn += "<br>WR_007: " + idWithName.get(id) + " with id: " + id + ", in file: " + file
 						+ ", does not appear to have been used.";
 				fxmlWarningReturn += "<Issue  issueID=\"WR_007\" severity=\"info\" class=\"structure\" type=\"orphaned item\">";
-				fxmlWarningReturn += idWithName.get(id) + " with id: " + id + ", in file: " + file
-						+ ", does not appear to have been used.";
+				fxmlWarningReturn += StringEscapeUtils.escapeXml10(idWithName.get(id) + " with id: " + id + ", in file: " + file
+						+ ", does not appear to have been used.");
 				fxmlWarningReturn += "</Issue>";
 				errChk("WR_007");
 				iwrCnt++;
@@ -7365,6 +7308,138 @@ public class FileStructureCheck {
 			iErr = errList.indexOf(err);
 		}
 
+	}
+
+	private void geometryIssue(String code, boolean warning, String message) {
+		if (code.equals("WR_029")) {
+			validationIncomplete = true;
+			// Preserve one incomplete-validation summary even after the warning cap.
+			if (geometryLimitReported) return;
+			geometryLimitReported = true;
+		} else if (warning ? iwrCnt >= Math.max(1, iWrnMaxStr) : ierCnt >= Math.max(1, iErrMaxStr)) return;
+		String xml = "<Issue issueID=\"" + code + "\" severity=\"" + (warning ? "info" : "high")
+				+ "\" class=\"structure\" type=\"geometry\">" + StringEscapeUtils.escapeXml10(message) + "</Issue>";
+		String html = "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		if (warning) { fxmlWarningReturn += xml; fWarningReturn += html; iwrCnt++; }
+		else { fxmlErrorReturn += xml; fErrorReturn += html; ierCnt++; }
+		errChk(code);
+	}
+
+	private void structureIssue(String code, String type, String message) {
+		if (ierCnt >= Math.max(1, iErrMaxStr)) return;
+		fxmlErrorReturn += "<Issue issueID=\"" + code + "\" severity=\"high\" class=\"structure\" type=\"" + type + "\">"
+				+ StringEscapeUtils.escapeXml10(message) + "</Issue>";
+		fErrorReturn += "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		ierCnt++;
+		errChk(code);
+	}
+
+	void unexpectedFailure(Exception ex) {
+		structureIssue("ER_077", "unexpected exception", "Structural validation could not complete: " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
+	}
+
+	private boolean skipUnsupportedAlternative(ZipFile zip, String part) {
+		if (unsupportedAlternatives == null) unsupportedAlternatives = AlternativePolicy.skippedParts(zip, consumer);
+		if (!unsupportedAlternatives.contains(part)) return false;
+		modelRules.unavailable(part);
+		if (reportedUnsupportedAlternatives.add(part)) structureWarning("WR_032", "unsupported alternative",
+				"Unsupported alternative " + part + " was skipped; a supported " + (consumer == ValidationConsumer.PRINTER ? "full-resolution " : "") + "representation is available. Rendering/printing was not evaluated.");
+		return true;
+	}
+
+	private void structureWarning(String code, String type, String message) {
+		if (iwrCnt >= Math.max(1, iWrnMaxStr)) return;
+		fxmlWarningReturn += "<Issue issueID=\"" + code + "\" severity=\"info\" class=\"structure\" type=\"" + type + "\">"
+				+ StringEscapeUtils.escapeXml10(message) + "</Issue>";
+		fWarningReturn += "<br>" + code + ": " + StringEscapeUtils.escapeHtml4(message);
+		iwrCnt++;
+		errChk(code);
+	}
+
+	private final Set<String> inaccessibleParts = new HashSet<String>();
+	private void inaccessibleModel(String file) {
+		modelRules.unavailable(file);
+		if (!inaccessibleParts.add(file)) return;
+		validationIncomplete = true;
+		if (inaccessibleParts.size() > 1) return;
+		// Keep an explicit incompleteness diagnostic even after the detail limit.
+		String message = "Validation incomplete: encrypted model " + file
+				+ " (and possibly other encrypted parts) could not be decrypted. Its object references and geometry were not checked; rendering/printing and alternative selection were not evaluated.";
+		fxmlWarningReturn += "<Issue issueID=\"WR_031\" severity=\"info\" class=\"structure\" type=\"encrypted content\">"
+				+ StringEscapeUtils.escapeXml10(message) + "</Issue>";
+		fWarningReturn += "<br>WR_031: " + StringEscapeUtils.escapeHtml4(message);
+		iwrCnt++;
+		errChk("WR_031");
+	}
+
+	/** A null result means opaque encrypted bytes, not a proven missing object. */
+	private String decryptReference(String text, String file) {
+		if (!text.startsWith("%3McF")) return text;
+		KeyInfo key = CheckKeyInfo(file);
+		if (key != null) {
+			DeCryptModel decrypt = new DeCryptModel();
+			decrypt.sAAD = key.getAAD();
+			decrypt.bSha256 = key.getSha256();
+			decrypt.bNoComp = key.getNoComp();
+			decrypt.FileLoc = "ztmp" + key.getFile();
+			decrypt.sCT = key.getCT();
+			decrypt.sIV = key.getIV();
+			decrypt.sTAG = key.getTAG();
+			try { return decrypt.DoDecrypt(); }
+			catch (Exception ex) {
+				if (DeCryptModel.hasContentKey(key)) {
+					structureIssue("ER_190", "encrypted content", "Encrypted model " + file + " failed authentication or decompression after its content key was recovered.");
+					return null;
+				}
+			}
+		}
+		inaccessibleModel(file);
+		return null;
+	}
+
+	private void checkModelRules(Document doc, String file) {
+		NodeList nodes = doc.getElementsByTagName("*");
+		for (int i = 0; i < nodes.getLength(); i++) {
+			Element e = (Element)nodes.item(i);
+			if (e.hasAttributeNS("http://www.w3.org/XML/1998/namespace", "space"))
+				structureIssue("ER_184", "XML attribute", "xml:space is not permitted in model markup: " + file);
+			String ns = e.getNamespaceURI();
+			if ((GeometryCheck.CORE.equals(ns) && "base".equals(e.getLocalName()))
+					|| ("http://schemas.microsoft.com/3dmanufacturing/material/2015/02".equals(ns) && "color".equals(e.getLocalName()))) {
+				String value = e.getAttribute(e.hasAttribute("color") ? "color" : "displaycolor");
+				if (!value.matches("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?"))
+					structureIssue("ER_189", "color value", "Invalid hexadecimal color " + value + " in " + file);
+			}
+			String path = "";
+			if (GeometryCheck.CORE.equals(ns) && ("component".equals(e.getLocalName()) || "item".equals(e.getLocalName())))
+				path = e.getAttributeNS(GeometryCheck.PROD, "path").trim();
+			if (sns.equals(ns) && "sliceref".equals(e.getLocalName())) path = e.getAttribute("slicepath").trim();
+			if (GeometryCheck.CORE.equals(ns) && "object".equals(e.getLocalName())) path = e.getAttributeNS(sns, "slicepath").trim();
+			if (path.isEmpty()) continue;
+			String target = GeometryCheck.part(file, path);
+			String rels = file.substring(0, file.lastIndexOf('/') + 1) + "_rels/" + file.substring(file.lastIndexOf('/') + 1) + ".rels";
+			NodeList links = relationshipRels.get(rels.substring(1));
+			boolean found = false;
+			if (links != null) for (int j = 0; j < links.getLength(); j++) {
+				Element link = (Element)links.item(j);
+				if (relTypes.get(0).equals(link.getAttribute("Type")) && !"External".equals(link.getAttribute("TargetMode"))
+						&& target != null && target.equals(GeometryCheck.part(file, link.getAttribute("Target").trim()))) found = true;
+			}
+			if (!found) structureIssue("ER_185", "model relationship", "Model reference " + path + " in " + file + " requires a 3dmodel relationship in " + rels);
+		}
+	}
+
+	private String declaredContentType(String part) {
+		if (nType_override != null) for (int i = 0; i < nType_override.getLength(); i++) {
+			Element e = (Element)nType_override.item(i);
+			if (part.equalsIgnoreCase(GeometryCheck.part("/", e.getAttribute("PartName")))) return e.getAttribute("ContentType").trim();
+		}
+		int dot = part.lastIndexOf('.');
+		if (dot >= 0 && nType_default != null) for (int i = 0; i < nType_default.getLength(); i++) {
+			Element e = (Element)nType_default.item(i);
+			if (part.substring(dot + 1).equalsIgnoreCase(e.getAttribute("Extension"))) return e.getAttribute("ContentType").trim();
+		}
+		return "";
 	}
 
 	private boolean overRideFileCheck(String file) {
@@ -7419,13 +7494,52 @@ public class FileStructureCheck {
 			fErrorReturn += "<br>ER_107: " + idName + " with id=" + idIn + " in file: " + file + " conflicts with "
 					+ sfnd + " which has the same id.";
 			fxmlErrorReturn += "<Issue  issueID=\"ER_107\" severity=\"critical\" class=\"structure\" type=\"id reference\">";
-			fxmlErrorReturn += idName + " with id=" + idIn + " in file: " + file + " conflicts with " + sfnd
-					+ " which has the same id.";
+			fxmlErrorReturn += StringEscapeUtils.escapeXml10(idName + " with id=" + idIn + " in file: " + file + " conflicts with " + sfnd
+					+ " which has the same id.");
 			fxmlErrorReturn += "</Issue>";
 			errChk("ER_107");
 			ierCnt++;
 		}
 		return fnd;
+	}
+
+	/** Report padding before reference lookup trims it; never change the document. */
+	private boolean checkReferenceWhitespace(Document doc, String file) {
+		// Parts can be parsed again for references or decryption. Warn once per attribute.
+		if (!referenceWhitespaceParts.add(file))
+			return true;
+		NodeList elements = doc.getElementsByTagName("*");
+		for (int i = 0; i < elements.getLength(); i++) {
+			Node element = elements.item(i);
+			for (int j = 0; j < element.getAttributes().getLength(); j++) {
+				Node attribute = element.getAttributes().item(j);
+				// The initial ZIP pass uses a namespace-unaware DOM. Accept any prefix.
+				String name = attribute.getNodeName();
+				if (name.startsWith("xmlns:"))
+					continue;
+				String localName = name.substring(name.indexOf(':') + 1);
+				if (!localName.equals("path") && !localName.equals("slicepath")
+						&& !localName.equals("thumbnail") && !name.equals("Target"))
+					continue;
+				String value = attribute.getTextContent();
+				if (value.equals(value.trim()))
+					continue;
+				String message = "Leading or trailing whitespace in attribute " + name + " on element "
+						+ element.getNodeName() + " in file: " + file + "; reference: [" + value
+						+ "]. Consumers may resolve this reference differently.";
+				String escaped = StringEscapeUtils.escapeXml10(message);
+				fWarningReturn += "<br>WR_026: " + escaped + "<br>";
+				fxmlWarningReturn += "<Issue issueID=\"WR_026\" severity=\"info\" class=\"structure\" type=\"reference whitespace\">"
+						+ escaped + "</Issue>";
+				errChk("WR_026");
+				iwrCnt++;
+				if (iwrCnt > iWrnMaxStr) {
+					fWarningReturn += "<br>More than " + iWrnMaxStr + " warnings found, stopping..<br>";
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	private void backSlashWarn(String loc, String file) {
@@ -7435,7 +7549,7 @@ public class FileStructureCheck {
 		fWarningReturn += "<br>WR_015: Found backslash rather than forwardslash for path " + loc + " in " + file
 				+ "<br>";
 		fxmlWarningReturn += "<Issue  issueID=\"WR_015\" severity=\"info\" class=\"structure\" type=\"convention\">";
-		fxmlWarningReturn += "Found backslash rather than forwardslash for path " + loc + " in " + file;
+		fxmlWarningReturn += StringEscapeUtils.escapeXml10("Found backslash rather than forwardslash for path " + loc + " in " + file);
 		fxmlWarningReturn += "</Issue>";
 		errChk("WR_015");
 		iwrCnt++;
@@ -7455,7 +7569,7 @@ public class FileStructureCheck {
 			if (!xfile.trim().toLowerCase().startsWith("<?xml"))
 				return;
 
-			DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+			DocumentBuilderFactory dbFactory = SafeXml.factory();
 			dbFactory.setNamespaceAware(true);// needed to use
 												// getElementsByTagNameNS
 			DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
