@@ -5,6 +5,41 @@ The general conformance tools stay in `tests/cli/`, and their self-test remains
 at `tests/cli/issues/Test-Runner.ps1`. Run the commands below from the project
 directory; generated reports still go to `tests/cli/results/`.
 
+## JDK 8 Actions compilation failure
+
+The [failed Code Validation run](https://github.com/3MFConsortium/3mf_Editor/actions/runs/41414097211)
+uses JDK 8. Compiling the same sources with Temurin 8u504 reproduces
+`FileStructureCheck.java:3029: error: code too large` in `fillUuid`.
+A newer compiler with `--release 8` passes, so API targeting alone does not
+detect this regression: Java 8 emits enough bytecode to exceed the JVM's
+per-method size limit.
+
+The final displacement scalar-product and unused-resource checks now run in
+`checkDisplacementAndUnusedResources`, called at the end of `fillUuid`.
+The existing statements, check order, shared tables, counters, and early returns
+are preserved. No workflow or Java version change is required.
+
+Reproduce the strict CI compilation using an actual JDK 8 installation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/cli/issues/Test-Java8Build.ps1 -JdkHome C:/path/to/jdk8
+```
+
+The regression rejects newer compilers and writes fresh classes and logs under
+ignored `tests/cli/results/java8-build-*`. The script is not Git-ignored.
+Temurin 8u504 strict compilation (`-Xlint:all -Werror`) passes without warnings.
+On the same Java 8 runtime, 41 consumer/configuration, 37 semantic, 19 alternative
+eligibility, and 19 model-schema checks pass.
+
+The completed suite 11 CLI schema/structure run on Java 21 reports 125 passed,
+one existing mismatch (`N_DPX_3314_03`, the documented mirroring specification
+conflict), and one coverage error (missing Appendix C `P_3212_04`). All 126
+available models finish without process errors or timeouts; four are additional
+checkout models outside Appendix C. Results are under
+`tests/cli/results/action-displacement/20261102-110938-118a43c4/`
+(`summary.json`, `results.csv`, and `junit.xml`). This is not rendering or printer
+conformance verification. No GitHub rerun was performed.
+
 ## Issue #23: refreshed mismatch report
 
 The historical 37 mismatches were collected before printer/editor selection.

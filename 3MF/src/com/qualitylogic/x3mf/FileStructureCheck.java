@@ -7037,6 +7037,12 @@ public class FileStructureCheck {
 			}
 
 		}
+		checkDisplacementAndUnusedResources(verticesTable, triangleTable, disp2dGroupTable, normVectorGroupTable, file);
+	}
+
+	// Keep the final validation phase separate so Java 8 bytecode stays below the per-method limit.
+	private void checkDisplacementAndUnusedResources(DefaultTableModel verticesTable, DefaultTableModel triangleTable,
+			DefaultTableModel disp2dGroupTable, DefaultTableModel normVectorGroupTable, String file) {
 		// Normalize vertices
 //		Double maxX = 0.0;
 //		Double maxY = 0.0;
